@@ -104,6 +104,7 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
           <div style="position:absolute;inset:0;pointer-events:none;background:linear-gradient(115deg,rgba(255,255,255,.09) 0%,rgba(255,255,255,.02) 22%,transparent 40%),radial-gradient(115% 95% at 50% 45%,transparent 55%,rgba(0,0,0,.6) 100%)"></div>
         </sc-if>
         <div style="position:absolute;top:9px;left:12px;font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:rgba(150,255,190,.5);pointer-events:none">CH·1→X &nbsp; CH·2→Y &nbsp; XY</div>
+        <div onClick="{{scopeModeToggle}}" title="Toggle oscilloscope / spectrum analyzer" style="position:absolute;top:8px;right:12px;z-index:3;font:600 7px 'IBM Plex Mono',monospace;letter-spacing:.1em;color:#062012;background:rgba(150,255,190,.8);border-radius:3px;padding:3px 8px;cursor:pointer">{{scopeModeLabel}}</div>
         <div ref="{{fpsRef}}" style="position:absolute;bottom:8px;right:11px;font:400 7.5px 'IBM Plex Mono',monospace;color:rgba(150,255,190,.35);pointer-events:none"></div>
 
       </div>
@@ -210,7 +211,7 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{&quot;scanlines&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Screen&quot;},&quot;glassReflection&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Screen&quot;}}">
 class Component extends DCLogic {
-  state = { power:false, drone:true, gen:'lissajous', octBase:48, playing:false, loop:false, hueFollow:true, midiName:'', midiDur:0, perf:false, warm:false, tick:0, saving:false, texTab:'tex', presetOpen:false, bpm:120 };
+  state = { power:false, drone:true, gen:'lissajous', octBase:48, playing:false, loop:false, hueFollow:true, midiName:'', midiDur:0, perf:false, warm:false, tick:0, saving:false, texTab:'tex', presetOpen:false, bpm:120, scopeMode:'scope' };
   constructor(props){
     super(props);
     this.TAU = Math.PI*2;
@@ -426,7 +427,8 @@ class Component extends DCLogic {
       if(!this.ctx)this.ctx=new (window.AudioContext||window.webkitAudioContext)();
       await this.ctx.resume();
       if(!this.node){this.node=this.ctx.createScriptProcessor(2048,0,2);this.node.onaudioprocess=e=>this.process(e);}
-      this.node.connect(this.ctx.destination);
+      if(!this.analyser){ this.analyser=this.ctx.createAnalyser(); this.analyser.fftSize=4096; this.analyser.smoothingTimeConstant=0.8; this.analyser.connect(this.ctx.destination); this._freqData=new Float32Array(this.analyser.frequencyBinCount); }
+      this.node.connect(this.analyser);
       this.running=true;
     }else{
       if(this.node)this.node.disconnect();
@@ -443,6 +445,37 @@ class Component extends DCLogic {
     this.DPR=Math.min(2,window.devicePixelRatio||1);
     const w=Math.round(r.width*this.DPR),h=Math.round(r.height*this.DPR);
     if(w&&h&&(cv.width!==w||cv.height!==h)){ cv.width=w;cv.height=h; }
+  }
+  _drawAnalyzer(bctx,W,H,DPR){
+    bctx.globalCompositeOperation='source-over';
+    bctx.fillStyle='#060d08'; bctx.fillRect(0,0,W,H);
+    const padL=10*DPR,padR=10*DPR,padT=10*DPR,padB=16*DPR, plotW=W-padL-padR, plotH=H-padT-padB;
+    const l0=Math.log10(20), dec=3, f2x=f=>padL+plotW*(Math.log10(f)-l0)/dec;
+    const dbTop=6,dbBot=-90, db2y=db=>padT+plotH*(dbTop-db)/(dbTop-dbBot);
+    // vertical freq grid + labels
+    bctx.lineWidth=1; bctx.strokeStyle='rgba(130,255,170,0.07)'; bctx.beginPath();
+    [30,50,100,200,300,500,1000,2000,3000,5000,10000,20000].forEach(f=>{ const x=f2x(f); bctx.moveTo(x,padT); bctx.lineTo(x,padT+plotH); });
+    bctx.stroke();
+    // horizontal dB grid
+    bctx.strokeStyle='rgba(130,255,170,0.05)'; bctx.beginPath();
+    for(let db=0;db>=-84;db-=12){ const y=db2y(db); bctx.moveTo(padL,y); bctx.lineTo(padL+plotW,y); }
+    bctx.stroke();
+    bctx.fillStyle='rgba(150,255,190,0.4)'; bctx.font=(7*DPR)+"px 'IBM Plex Mono',monospace"; bctx.textAlign='center';
+    [[100,'100'],[1000,'1k'],[10000,'10k']].forEach(a=>{ bctx.fillText(a[1],f2x(a[0]),padT+plotH+11*DPR); });
+    // spectrum
+    if(this.analyser&&this.running&&this._freqData){
+      this.analyser.getFloatFrequencyData(this._freqData);
+      const bins=this._freqData.length, ny=this.ctx.sampleRate/2, cols=Math.max(2,plotW|0);
+      bctx.beginPath(); bctx.moveTo(padL,padT+plotH);
+      for(let px=0;px<=cols;px++){ const f=Math.pow(10,l0+dec*(px/cols)); let bin=Math.round(f*bins/ny); if(bin<0)bin=0; if(bin>=bins)bin=bins-1; let db=this._freqData[bin]; if(!isFinite(db))db=-120; db+=4.5*Math.log2(Math.max(20,f)/1000); let y=db2y(db); if(y<padT)y=padT; if(y>padT+plotH)y=padT+plotH; bctx.lineTo(padL+px,y); }
+      bctx.lineTo(padL+plotW,padT+plotH); bctx.closePath();
+      const grd=bctx.createLinearGradient(0,padT,0,padT+plotH); grd.addColorStop(0,'rgba(120,235,165,0.5)'); grd.addColorStop(1,'rgba(120,235,165,0.04)');
+      bctx.fillStyle=grd; bctx.fill();
+      bctx.strokeStyle='rgba(170,255,195,0.85)'; bctx.lineWidth=1.2*DPR; bctx.stroke();
+    } else {
+      bctx.fillStyle='rgba(150,255,190,0.3)'; bctx.textAlign='center'; bctx.font=(9*DPR)+"px 'IBM Plex Mono',monospace"; bctx.fillText('POWER ON / PLAY A NOTE TO ANALYZE',W/2,H/2);
+    }
+    bctx.fillStyle='rgba(150,255,190,0.5)'; bctx.textAlign='left'; bctx.font="600 "+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.fillText('SPECTRUM · 20Hz–20kHz',10*DPR,14*DPR);
   }
   frame(now){
     this._raf=requestAnimationFrame(t=>this.frame(t));
@@ -462,6 +495,7 @@ class Component extends DCLogic {
     const wantHue=this.state.hueFollow&&noteCt>0?Math.max(-100,Math.min(140,(noteSum/noteCt-60)*3.2)):0;
     this.hueOffSm+=(wantHue-this.hueOffSm)*0.06;
     if((this._uiCnt=(this._uiCnt||0)+1)>=15){ this._uiCnt=0; this.setState({tick:this.state.tick+1}); }
+    if(this.state.scopeMode==='analyzer'){ this._drawAnalyzer(bctx,W,H,DPR); return; }
     bctx.globalCompositeOperation='source-over';
     bctx.fillStyle='rgba(4,9,5,'+(1-P.persist).toFixed(3)+')';
     bctx.fillRect(0,0,W,H);
@@ -744,6 +778,7 @@ class Component extends DCLogic {
       glass:this.props.glassReflection??true,
       statusText:this.running?('RUNNING · '+(this.ctx.sampleRate/1000).toFixed(1)+' kHz · '+nact+' VOICE'+(nact===1?'':'S')):'STANDBY — FLIP POWER OR PLAY A KEY',
       voiceDots, banks:banks3, keys,
+      scopeMode:s.scopeMode, scopeModeToggle:()=>this.setState({scopeMode:s.scopeMode==='analyzer'?'scope':'analyzer'}), scopeModeLabel:s.scopeMode==='analyzer'?'◉ ANALYZER':'◎ SCOPE',
       texPanelLabel:texBank.label, texParams:texBank.params, texTabLabel:texOtherLabel, texTabToggle:()=>this.setState({texTab:texOther}),
       presetOpen:s.presetOpen, presetToggle:()=>this.setState({presetOpen:!s.presetOpen}), presetClose:()=>this.setState({presetOpen:false}), presetMenu,
       fmSyncOn:P.fmSync, fmSyncToggle:()=>this.toggleSync(),
