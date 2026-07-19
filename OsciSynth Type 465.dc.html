@@ -81,6 +81,14 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
     </sc-if>
   </div>
 
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <div style="font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#4a463a">TEMPO</div>
+    <div onClick="{{fmSyncToggle}}" title="Sync FM RATE to tempo (note divisions) vs free Hz" style="{{syncBtnStyle}}">SYNC</div>
+    <div style="font:600 7.5px 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#4a463a">BPM</div>
+    <input type="number" min="20" max="300" step="1" value="{{bpmVal}}" onInput="{{bpmChange}}" title="Manual BPM (used when no MIDI is playing)" style="width:56px;padding:5px 6px;border-radius:4px;border:1px solid #8f8a77;background:#17160f;color:#ffb454;font:500 8.5px 'IBM Plex Mono',monospace;outline:none;text-align:center">
+    <div style="font:500 7.5px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#8a8574">{{tempoSrcInfo}} · {{fmDivLabel}}</div>
+  </div>
+
   <div style="display:flex;gap:16px;align-items:stretch;flex-wrap:wrap">
     <div style="flex:1;min-width:340px;background:linear-gradient(180deg,#2b2a24,#201f1a);border-radius:10px;padding:14px;box-shadow:inset 0 1px 2px rgba(255,255,255,.08),0 2px 6px rgba(0,0,0,.35);position:relative">
       <div style="position:absolute;top:5px;left:5px;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#96917f,#45412f);box-shadow:inset 0 0 2px #000"><div style="position:absolute;left:1px;right:1px;top:3.5px;height:1.5px;background:#1c1a12;transform:rotate(35deg)"></div></div>
@@ -202,7 +210,7 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{&quot;scanlines&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Screen&quot;},&quot;glassReflection&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Screen&quot;}}">
 class Component extends DCLogic {
-  state = { power:false, drone:true, gen:'lissajous', octBase:48, playing:false, loop:false, hueFollow:true, midiName:'', midiDur:0, perf:false, warm:false, tick:0, saving:false, texTab:'tex', presetOpen:false };
+  state = { power:false, drone:true, gen:'lissajous', octBase:48, playing:false, loop:false, hueFollow:true, midiName:'', midiDur:0, perf:false, warm:false, tick:0, saving:false, texTab:'tex', presetOpen:false, bpm:120 };
   constructor(props){
     super(props);
     this.TAU = Math.PI*2;
@@ -234,6 +242,10 @@ class Component extends DCLogic {
     ];
     this.P = { master:0.5 };
     this.CTLS.forEach(c=>this.P[c[1]]=c[6]);
+    // --- Phase 3: tempo sync (FM RATE as free Hz or a note division of the tempo) ---
+    this.P.fmSync=false; this.P.fmDivision=6; // 6 = '1/4'
+    this.FM_DIVS=[{l:'1/1',b:4},{l:'1/2.',b:3},{l:'1/1T',b:8/3},{l:'1/2',b:2},{l:'1/4.',b:1.5},{l:'1/2T',b:4/3},{l:'1/4',b:1},{l:'1/8.',b:0.75},{l:'1/4T',b:2/3},{l:'1/8',b:0.5},{l:'1/16.',b:0.375},{l:'1/8T',b:1/3},{l:'1/16',b:0.25},{l:'1/16T',b:1/6},{l:'1/32',b:0.125},{l:'1/32T',b:1/12},{l:'1/64',b:0.0625}];
+    this.midiBpm=120;
     // --- Phase 0: parameter history (75-step, gesture-coalesced undo/redo) ---
     this.undoStack=[]; this.redoStack=[]; this.UNDO_MAX=75; this._mutTok=0;
     // --- Phase 0: preset banks (user in localStorage; factory/research fetched or imported) ---
@@ -331,18 +343,18 @@ class Component extends DCLogic {
       pos+=8+len;
     }
     raw.sort((a,b)=>a.tick-b.tick||a.pri-b.pri);
-    const evs=[]; let time=0,lastTick=0,usPerQ=500000;
+    const evs=[]; let time=0,lastTick=0,usPerQ=500000,firstTempo=0;
     const smpte=(division&0x8000)!==0;
     const tpq=smpte?0:(division||480);
     const secPerTickSMPTE=smpte?1/(((256-(division>>8))&0xFF)*(division&0xFF)):0;
     for(const e of raw){
       time+=smpte?(e.tick-lastTick)*secPerTickSMPTE:(e.tick-lastTick)*usPerQ/(tpq*1e6);
       lastTick=e.tick;
-      if(e.tempo!==undefined){usPerQ=e.tempo;continue;}
+      if(e.tempo!==undefined){usPerQ=e.tempo;if(!firstTempo)firstTempo=e.tempo;continue;}
       if(e.ch===9)continue;
       evs.push({t:time,on:e.on,note:e.note,vel:e.vel||0});
     }
-    return {events:evs,dur:time};
+    return {events:evs,dur:time,bpm:firstTempo?60000000/firstTempo:120};
   }
   fmtTime(s){s=Math.max(0,s);return (s/60|0)+':'+String(s%60|0).padStart(2,'0');}
   seekTo(t){ this.allNotesOff(); this.songTime=t; this.evIdx=0; while(this.evIdx<this.midiEvents.length&&this.midiEvents[this.evIdx].t<t)this.evIdx++; }
@@ -370,7 +382,8 @@ class Component extends DCLogic {
           if(this.state.loop)this.seekTo(0); else this.setPlaying(false);
         }
       }
-      this.fmPh+=P.fmRate/sr; if(this.fmPh>=1)this.fmPh-=1;
+      const _fmHz=P.fmSync?(((this.midiPlaying?this.midiBpm:(this.state.bpm||120))/60)/((this.FM_DIVS[(P.fmDivision|0)]||this.FM_DIVS[6]).b)):P.fmRate;
+      this.fmPh+=_fmHz/sr; if(this.fmPh>=1)this.fmPh-=1;
       const fmMod=1+P.fmDepth*Math.sin(TAU*this.fmPh);
       this.ax=(this.ax+P.rotX*ROT)%TAU; this.ay=(this.ay+P.rotY*ROT)%TAU; this.az=(this.az+P.rotZ*ROT)%TAU;
       const cY=Math.cos(this.ay),sY=Math.sin(this.ay),cX=Math.cos(this.ax),sX=Math.sin(this.ax),cZ=Math.cos(this.az),sZ=Math.sin(this.az);
@@ -494,7 +507,7 @@ class Component extends DCLogic {
   }
   // --- Phase 0: parameter model + history ------------------------------------
   _pmeta(id){ if(id==='master')return {min:0,max:1,step:0.001}; const c=this.CTLS.find(x=>x[1]===id); return c?{min:c[3],max:c[4],step:c[5]}:null; }
-  _paramIds(){ return this.CTLS.map(c=>c[1]).concat('master'); }
+  _paramIds(){ return this.CTLS.map(c=>c[1]).concat('master','fmSync','fmDivision'); }
   snapshot(){ const p={}; this._paramIds().forEach(id=>{ p[id]=this.P[id]; }); return {params:p, gen:this.state.gen}; }
   applySnapshot(s){ if(!s)return; this._mutTok++; if(s.params)this._paramIds().forEach(id=>{ if(s.params[id]!==undefined)this.P[id]=s.params[id]; }); this.setState(s.gen?{gen:s.gen}:{}); }
   pushUndo(before){ this.undoStack.push(before); if(this.undoStack.length>this.UNDO_MAX)this.undoStack.shift(); this.redoStack.length=0; }
@@ -502,8 +515,8 @@ class Component extends DCLogic {
   undo(){ if(!this.undoStack.length)return; this.redoStack.push(this.snapshot()); this.applySnapshot(this.undoStack.pop()); }
   redo(){ if(!this.redoStack.length)return; this.undoStack.push(this.snapshot()); this.applySnapshot(this.redoStack.pop()); }
   // --- Phase 0: presets -----------------------------------------------------
-  _clampParam(id,v){ const m=this._pmeta(id); if(!m||typeof v!=='number'||!isFinite(v))return this.P[id]; v=Math.max(m.min,Math.min(m.max,v)); if(m.step>=1)v=Math.round(v/m.step)*m.step; return v; }
-  _defaultParams(){ const p={master:0.5}; this.CTLS.forEach(c=>{ p[c[1]]=c[6]; }); return p; }
+  _clampParam(id,v){ const m=this._pmeta(id); if(!m)return v; if(typeof v!=='number'||!isFinite(v))return this.P[id]; v=Math.max(m.min,Math.min(m.max,v)); if(m.step>=1)v=Math.round(v/m.step)*m.step; return v; }
+  _defaultParams(){ const p={master:0.5,fmSync:false,fmDivision:6}; this.CTLS.forEach(c=>{ p[c[1]]=c[6]; }); return p; }
   _curBank(){ return (this.banks[this.curBankKey]||[]).filter(p=>p&&(p.synth||p.params)); } // hide EQ-only presets until the Phase 2 EQ exists
   applyPreset(p,record){
     if(!p)return;
@@ -540,6 +553,8 @@ class Component extends DCLogic {
   _persistUser(){ try{ localStorage.setItem('synesthesia_presets_v1', JSON.stringify(this.banks.user)); return true; }catch(e){ console.warn('Synesthesia: user presets could not be saved to localStorage (in-memory only this session):', e); return false; } }
   navPreset(dir){ const bank=this._curBank(); if(!bank.length)return; let i=this.presetIdx; i=(i<0?(dir>0?0:bank.length-1):i+dir); i=((i%bank.length)+bank.length)%bank.length; this.presetIdx=i; this.applyPreset(bank[i]); }
   pickPreset(gi){ const bank=this._curBank(); if(gi>=0&&gi<bank.length){ this.presetIdx=gi; this.applyPreset(bank[gi]); } this.setState({presetOpen:false}); }
+  divDown(e){ e.preventDefault(); this._mutTok++; const el=e.currentTarget; el.setPointerCapture(e.pointerId); const sy=e.clientY, si=this.P.fmDivision|0; const before=this.snapshot(); const move=ev=>{ const ni=Math.max(0,Math.min(this.FM_DIVS.length-1,Math.round(si+(sy-ev.clientY)/18))); if(ni!==(this.P.fmDivision|0)){ this.P.fmDivision=ni; this.setState({}); } }; const up=()=>{ this.pushUndoIfChanged(before); el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); }; el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up); }
+  toggleSync(){ const before=this.snapshot(); this.P.fmSync=!this.P.fmSync; this.pushUndo(before); this.setState({}); }
   switchBank(){ const keys=this.bankMeta.map(b=>b[0]); const cur=keys.indexOf(this.curBankKey); this.curBankKey=keys[(cur+1)%keys.length]; this.presetIdx=-1; this.setState({}); }
   importBank(doc){ if(!doc||!Array.isArray(doc.presets))return false; this.banks.custom=doc.presets; this.curBankKey='custom'; this.presetIdx=-1; this.setState({}); return true; } // imports go to their own CUSTOM slot; built-ins preserved
   async _tryFetchBanks(){ const grab=async(file,key)=>{ if(this.banks[key]&&this.banks[key].length)return; try{ const r=await fetch(file); if(!r||!r.ok)return; const d=await r.json(); if(d&&Array.isArray(d.presets))this.banks[key]=d.presets; }catch(e){} }; await grab('./presets.json','factory'); await grab('./presets_further_research.json','research'); this.setState({}); }
@@ -635,6 +650,7 @@ class Component extends DCLogic {
       id,label,
       params:this.CTLS.filter(c=>c[0]===id).map(def=>{
         const [,pid,plabel,min,max,,,fmt]=def;
+        if(pid==='fmRate'&&P.fmSync){ const di=P.fmDivision|0; return { id:pid,label:'FM DIV',val:this.FM_DIVS[di].l,ptr:ptrStyle(di/(this.FM_DIVS.length-1),4,12,18),onDown:e=>this.divDown(e) }; }
         const frac=(P[pid]-min)/(max-min);
         return { id:pid,label:plabel,val:fmt(P[pid]),ptr:ptrStyle(frac,4,12,18),onDown:e=>this.dialDown(e,def) };
       }),
@@ -730,6 +746,11 @@ class Component extends DCLogic {
       voiceDots, banks:banks3, keys,
       texPanelLabel:texBank.label, texParams:texBank.params, texTabLabel:texOtherLabel, texTabToggle:()=>this.setState({texTab:texOther}),
       presetOpen:s.presetOpen, presetToggle:()=>this.setState({presetOpen:!s.presetOpen}), presetClose:()=>this.setState({presetOpen:false}), presetMenu,
+      fmSyncOn:P.fmSync, fmSyncToggle:()=>this.toggleSync(),
+      bpmVal:s.bpm, bpmChange:e=>{ const v=parseFloat(e.target.value); if(isFinite(v))this.setState({bpm:Math.max(20,Math.min(300,v))}); },
+      tempoSrcInfo:(this.midiEvents&&this.midiEvents.length)?('MIDI '+Math.round(this.midiBpm)+' BPM'+(this.midiPlaying?' ▸':'')):'MANUAL',
+      fmDivLabel:P.fmSync?('FM '+this.FM_DIVS[P.fmDivision|0].l):('FM '+P.fmRate.toFixed(2)+' Hz'),
+      syncBtnStyle:Object.assign({},presetBtn,{background:P.fmSync?'linear-gradient(180deg,#cfae7a,#b98f4a)':'linear-gradient(180deg,#efe9d8,#cfc9b6)',color:P.fmSync?'#2a2013':'#3b382f',boxShadow:P.fmSync?'inset 0 2px 4px rgba(0,0,0,.3),0 0 0 1px rgba(138,90,30,.4)':'0 2px 3px rgba(0,0,0,.3)'}),
       genHint:g[2],
       selName:g[1],
       selPtr:ptrStyle(genIdx/(this.GENS.length-1),6,16,25),
@@ -769,7 +790,7 @@ class Component extends DCLogic {
           const buf=await file.arrayBuffer();
           const r=this.parseMidi(buf);
           if(!r.events.length)throw new Error('No playable notes found');
-          this.midiEvents=r.events; this.midiDur=r.dur;
+          this.midiEvents=r.events; this.midiDur=r.dur; this.midiBpm=r.bpm||120;
           this.seekTo(0); this.setPlaying(false);
           this._midiErr=null;
           this.setState({midiName:file.name,midiDur:r.dur});
