@@ -252,6 +252,11 @@ class Component extends DCLogic {
       ['mod','morph','MORPH',0,1,0.001,0.5, v=>v.toFixed(3)],
       ['mod','fmRate','FM RATE',0,40,0.01,0, v=>v.toFixed(2)+' Hz'],
       ['mod','fmDepth','FM DEPTH',0,0.5,0.001,0, v=>v.toFixed(3)],
+      ['mod','detune','DETUNE',0,1,0.001,0, v=>(v*100).toFixed(0)+'%'],
+      ['mod','width','WIDTH',0,1,0.001,0, v=>(v*100).toFixed(0)+'%'],
+      ['lfo','lfoRate','LFO RATE',0.01,20,0.01,2, v=>v.toFixed(2)+' Hz'],
+      ['lfo','lfoDepth','LFO DEPTH',0,1,0.001,0, v=>(v*100).toFixed(0)+'%'],
+      ['lfo','lfoTarget','LFO →',0,4,1,0, v=>['OFF','MORPH','CUTOFF','PITCH','AMP'][v|0]||'OFF'],
       ['rot','rotX','ROT X',-1,1,0.001,-0.55, v=>v.toFixed(3)],
       ['rot','rotY','ROT Y',-1,1,0.001,0.8, v=>v.toFixed(3)],
       ['rot','rotZ','ROT Z',-1,1,0.001,0.5, v=>v.toFixed(3)],
@@ -303,7 +308,7 @@ class Component extends DCLogic {
     for(let i=0;i<this.MAXV;i++)this.voices.push({note:-1,freq:50,gate:false,env:0,vel:1,px:0,py:0,pz:0,s:0,age:0,lx:0.4,ly:0.2,lz:12});
     this.voiceAge=0; this.ctx=null; this.node=null; this.running=false;
     this.fmPh=0; this.ax=0; this.ay=0; this.az=0; this.lpX=0; this.lpY=0; this.curGain=0; this.outPeak=0;
-    this.svLX=0; this.svBX=0; this.svLY=0; this.svBY=0;
+    this.svLX=0; this.svBX=0; this.svLY=0; this.svBY=0; this.lfoPh=0; this._mMod=0;
     this.RING=16384; this.RM=this.RING-1;
     this.ringX=new Float32Array(this.RING); this.ringY=new Float32Array(this.RING); this.rw=0;
     this.CV=[[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
@@ -321,7 +326,7 @@ class Component extends DCLogic {
   mtof(n){return 440*Math.pow(2,(n-69)/12);}
   meterDot(i,lv){ const on=lv*10>=i+0.5, c=this.DOTCOLS[i<5?0:i<8?1:2]; return {bg:on?c[0]:'#8f8a77', sh:on?c[1]:'inset 0 1px 1px rgba(0,0,0,.3)'}; }
   shape(v,finc){
-    const TAU=this.TAU,P=this.P,gen=this.state.gen; let x,y,z; const m=P.morph;
+    const TAU=this.TAU,P=this.P,gen=this.state.gen; let x,y,z; const m=Math.max(0,Math.min(1,P.morph+(this._mMod||0)));
     if(gen==='lissajous'){ x=Math.sin(TAU*v.px); y=Math.sin(TAU*(v.py+P.phOff)); z=P.zHarm>0?Math.sin(TAU*v.pz):0; }
     else if(gen==='hyperstar'){ const th=TAU*v.s; const r=(1-m)+m*Math.cos(P.xHarm*th); x=r*Math.cos(th); y=r*Math.sin(th); z=0.45*Math.sin(P.yHarm*th)*m; }
     else if(gen==='cube'){ const u=(v.s-Math.floor(v.s))*16; const i=u|0,f=u-i; const a=this.CV[this.TOUR[i]],b=this.CV[this.TOUR[(i+1)&15]]; const rip=Math.sin(TAU*f*P.xHarm)*0.12*m; x=(a[0]+(b[0]-a[0])*f)*0.62+rip; y=(a[1]+(b[1]-a[1])*f)*0.62+rip*0.6; z=(a[2]+(b[2]-a[2])*f)*0.62; }
@@ -402,7 +407,7 @@ class Component extends DCLogic {
     const cut=Math.exp(-TAU*(400+(1-P.smooth)*11000)/sr);
     const dk=1+P.drive*5,dnorm=Math.tanh(dk);
     const aC=1-Math.exp(-1/(P.attack*sr)),dC=1-Math.exp(-1/(P.decay*sr)),rC=Math.exp(-1/(P.release*sr));
-    const fc=Math.min(sr*0.24,P.cutoff), fco=2*Math.sin(Math.PI*fc/sr), qd=1-Math.min(0.96,P.reso), fltOn=(P.cutoff<17900||P.reso>0.001);
+    const fc=Math.min(sr*0.24,P.cutoff), fco=2*Math.sin(Math.PI*fc/sr), qd=1-Math.min(0.96,P.reso), fltOn=(P.cutoff<17900||P.reso>0.001||((P.lfoTarget|0)===2&&P.lfoDepth>0));
     const dv=this.voices[0];
     dv.gate=this.state.drone&&this.running; dv.freq=P.baseFreq; dv.vel=1; if(dv.note<0)dv.note=0;
     let blockPeak=0;
@@ -422,6 +427,7 @@ class Component extends DCLogic {
       const _fmHz=P.fmSync?(((this.midiPlaying?this.midiBpm:(this.state.bpm||120))/60)/((this.FM_DIVS[(P.fmDivision|0)]||this.FM_DIVS[6]).b)):P.fmRate;
       this.fmPh+=_fmHz/sr; if(this.fmPh>=1)this.fmPh-=1;
       const fmMod=1+P.fmDepth*Math.sin(TAU*this.fmPh);
+      this.lfoPh+=P.lfoRate/sr; if(this.lfoPh>=1)this.lfoPh-=1; const lfo=Math.sin(TAU*this.lfoPh)*P.lfoDepth, lt=P.lfoTarget|0; this._mMod=(lt===1?lfo*0.5:0);
       this.ax=(this.ax+P.rotX*ROT)%TAU; this.ay=(this.ay+P.rotY*ROT)%TAU; this.az=(this.az+P.rotZ*ROT)%TAU;
       const cY=Math.cos(this.ay),sY=Math.sin(this.ay),cX=Math.cos(this.ax),sX=Math.sin(this.ax),cZ=Math.cos(this.az),sZ=Math.sin(this.az);
       let sumX=0,sumY=0,nact=0;
@@ -430,10 +436,10 @@ class Component extends DCLogic {
         if(v.gate){ if(!v._peak){ v.env+=(1-v.env)*aC; if(v.env>=0.995)v._peak=true; } else v.env+=(P.sustain-v.env)*dC; } else v.env*=rC;
         if(v.env<0.0005)continue;
         nact++;
-        const f=v.freq*P.drawSpd*fmMod;
-        v.px+=f*P.xHarm/sr; if(v.px>=1)v.px-=1;
-        v.py+=f*P.yHarm/sr; if(v.py>=1)v.py-=1;
-        v.pz+=f*P.zHarm/sr; if(v.pz>=1)v.pz-=1;
+        const f=v.freq*P.drawSpd*fmMod*(lt===3?(1+lfo*0.06):1), det=P.detune*0.03;
+        v.px+=f*P.xHarm*(1+det)/sr; if(v.px>=1)v.px-=1;
+        v.py+=f*P.yHarm*(1-det)/sr; if(v.py>=1)v.py-=1;
+        v.pz+=f*P.zHarm*(1+det*0.5)/sr; if(v.pz>=1)v.pz-=1;
         v.s+=f/sr;
         const sh=this.shape(v,f/sr);
         let x=sh[0],y=sh[1],z=sh[2];
@@ -449,13 +455,16 @@ class Component extends DCLogic {
       let x=sumX*norm,y=sumY*norm;
       if(P.drive>0){x=Math.tanh(x*dk)/dnorm;y=Math.tanh(y*dk)/dnorm;}
       this.lpX+=(x-this.lpX)*(1-cut); this.lpY+=(y-this.lpY)*(1-cut); x=this.lpX;y=this.lpY;
-      if(fltOn){ this.svLX+=fco*this.svBX; const hX=x-this.svLX-qd*this.svBX; this.svBX+=fco*hX; x=this.svLX;
-        this.svLY+=fco*this.svBY; const hY=y-this.svLY-qd*this.svBY; this.svBY+=fco*hY; y=this.svLY;
+      if(fltOn){ const fcoS=(lt===2)?2*Math.sin(Math.PI*Math.min(sr*0.24,Math.max(40,P.cutoff*Math.pow(2,lfo*2.5)))/sr):fco;
+        this.svLX+=fcoS*this.svBX; const hX=x-this.svLX-qd*this.svBX; this.svBX+=fcoS*hX; x=this.svLX;
+        this.svLY+=fcoS*this.svBY; const hY=y-this.svLY-qd*this.svBY; this.svBY+=fcoS*hY; y=this.svLY;
         if(!isFinite(this.svLX)||Math.abs(this.svLX)>8){this.svLX=0;this.svBX=0;} if(!isFinite(this.svLY)||Math.abs(this.svLY)>8){this.svLY=0;this.svBY=0;} }
       if(P.jitter>0){x+=(Math.random()-0.5)*P.jitter*0.08;y+=(Math.random()-0.5)*P.jitter*0.08;}
       this.ringX[this.rw]=x;this.ringY[this.rw]=y;this.rw=(this.rw+1)&this.RM;
       this.curGain+=(targetGain-this.curGain)*0.0015;
-      const oL=Math.tanh(x*1.1)*this.curGain*0.85, oR=Math.tanh(y*1.1)*this.curGain*0.85;
+      let oL=Math.tanh(x*1.1)*this.curGain*0.85, oR=Math.tanh(y*1.1)*this.curGain*0.85;
+      if(lt===4){ const am=1+lfo*0.5; oL*=am; oR*=am; }
+      if(P.width>0){ const mid=(oL+oR)*0.5, side=(oL-oR)*0.5*(1+P.width*1.6); oL=mid+side; oR=mid-side; }
       let eL=oL,eR=oR;
       if(this._eqActive){
         const det=(oL+oR)*0.5;
@@ -876,7 +885,7 @@ class Component extends DCLogic {
   }
   renderVals(){
     const s=this.state,P=this.P;
-    const BANKS=[['sig','SIGNAL'],['mod','MODULATION'],['rot','ROTATION'],['flt','FILTER'],['tex','TEXTURE'],['pho','BEAM & PHOSPHOR']];
+    const BANKS=[['sig','SIGNAL'],['mod','MODULATION'],['rot','ROTATION'],['flt','FILTER'],['lfo','LFO'],['tex','TEXTURE'],['pho','BEAM & PHOSPHOR']];
     const ptrStyle=(frac,top,h,org)=>({position:'absolute',left:'50%',top:top+'px',width:'3px',height:h+'px',marginLeft:'-1.5px',borderRadius:'2px',background:'#efe9d8',transformOrigin:'50% '+org+'px',transform:'rotate('+(-135+270*frac)+'deg)'});
     const banks=BANKS.map(([id,label])=>({
       id,label,
@@ -888,7 +897,7 @@ class Component extends DCLogic {
       }),
     }));
     // TEXTURE panel is tabbed with BEAM & PHOSPHOR (feature 3): sig/mod/rot render normally, tex/pho share one panel
-    const banks3=banks.filter(b=>b.id==='sig'||b.id==='mod'||b.id==='rot'||b.id==='flt');
+    const banks3=banks.filter(b=>b.id==='sig'||b.id==='mod'||b.id==='rot'||b.id==='flt'||b.id==='lfo');
     const texActive=s.texTab||'tex';
     const texBank=banks.find(b=>b.id===texActive)||banks.find(b=>b.id==='tex');
     const texOther=texActive==='tex'?'pho':'tex';
