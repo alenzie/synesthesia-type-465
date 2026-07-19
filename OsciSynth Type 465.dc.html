@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#141312;font-family:'IBM Plex Mono',ui-monospace,monospace;-webkit-font-smoothing:antialiased}
+a{color:#8a5a1e}a:hover{color:#b97c2e}
+@keyframes crtWarm{0%{transform:scale(.02,.02);opacity:0}22%{transform:scale(.05,.04);opacity:1}55%{transform:scale(1,.02);opacity:1}80%{transform:scale(1,1);opacity:.45}100%{transform:scale(1,1);opacity:0}}
+</style>
+</helmet>
+<div style="min-height:100vh;box-sizing:border-box;display:flex;justify-content:center;align-items:flex-start;padding:26px clamp(10px,2.5vw,40px)">
+<div style="width:min(1100px,100%);background:linear-gradient(180deg,#d6d1c3,#c4bfb1);border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.5);padding:20px 24px 24px;color:#3b382f;display:flex;flex-direction:column;gap:16px">
+
+  <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <div>
+      <div style="font:700 19px 'Space Grotesk',sans-serif;letter-spacing:.06em;color:#33302a">HUS-SYNTH <span style="color:#8a5a1e">*</span> TYPE 344</div>
+      <div style="font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#6d6858">POLYPHONIC X·Y STUDIO — NOTES ARE SHAPES</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px;margin-left:6px">
+      <div style="font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#5b5749">{{statusText}}</div>
+      <div ref="{{dotsRef}}" style="display:flex;gap:4px">
+        <sc-for list="{{voiceDots}}" as="d" hint-placeholder-count="10"><span style="{{d.style}}"></span></sc-for>
+      </div>
+    </div>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
+      <div style="{{pilotStyle}}"></div>
+      <div style="font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.18em;color:#4a463a">POWER</div>
+      <div onClick="{{togglePower}}" style="width:26px;height:44px;background:linear-gradient(180deg,#211f19,#161511);border-radius:5px;box-shadow:inset 0 2px 4px #000;position:relative;cursor:pointer">
+        <div style="{{leverStyle}}"></div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:16px;align-items:stretch;flex-wrap:wrap">
+    <div style="flex:1;min-width:340px;background:linear-gradient(180deg,#2b2a24,#201f1a);border-radius:10px;padding:14px;box-shadow:inset 0 1px 2px rgba(255,255,255,.08),0 2px 6px rgba(0,0,0,.35);position:relative">
+      <div style="position:absolute;top:5px;left:5px;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#96917f,#45412f);box-shadow:inset 0 0 2px #000"><div style="position:absolute;left:1px;right:1px;top:3.5px;height:1.5px;background:#1c1a12;transform:rotate(35deg)"></div></div>
+      <div style="position:absolute;top:5px;right:5px;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#96917f,#45412f);box-shadow:inset 0 0 2px #000"><div style="position:absolute;left:1px;right:1px;top:3.5px;height:1.5px;background:#1c1a12;transform:rotate(-20deg)"></div></div>
+      <div style="position:absolute;bottom:5px;left:5px;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#96917f,#45412f);box-shadow:inset 0 0 2px #000"><div style="position:absolute;left:1px;right:1px;top:3.5px;height:1.5px;background:#1c1a12;transform:rotate(70deg)"></div></div>
+      <div style="position:absolute;bottom:5px;right:5px;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#96917f,#45412f);box-shadow:inset 0 0 2px #000"><div style="position:absolute;left:1px;right:1px;top:3.5px;height:1.5px;background:#1c1a12;transform:rotate(10deg)"></div></div>
+      <div style="position:relative;border-radius:14px;overflow:hidden;height:min(46vh,440px);background:radial-gradient(120% 100% at 50% 45%,#0c1f12,#050b06 80%);box-shadow:inset 0 0 40px rgba(0,0,0,.85),inset 0 0 8px #000">
+        <canvas ref="{{beamRef}}" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+        <sc-if value="{{scan}}" hint-placeholder-val="{{ true }}">
+          <div style="position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,0,0,.15) 0 1px,transparent 1px 3px)"></div>
+        </sc-if>
+        <sc-if value="{{glass}}" hint-placeholder-val="{{ true }}">
+          <div style="position:absolute;inset:0;pointer-events:none;background:linear-gradient(115deg,rgba(255,255,255,.09) 0%,rgba(255,255,255,.02) 22%,transparent 40%),radial-gradient(115% 95% at 50% 45%,transparent 55%,rgba(0,0,0,.6) 100%)"></div>
+        </sc-if>
+        <div style="position:absolute;top:9px;left:12px;font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:rgba(150,255,190,.5);pointer-events:none">CH·1→X &nbsp; CH·2→Y &nbsp; XY</div>
+        <div ref="{{fpsRef}}" style="position:absolute;bottom:8px;right:11px;font:400 7.5px 'IBM Plex Mono',monospace;color:rgba(150,255,190,.35);pointer-events:none"></div>
+
+      </div>
+    </div>
+    <div style="flex:0 0 190px;display:flex;flex-direction:column;gap:12px;align-items:center;justify-content:space-between">
+      <div style="width:100%;background:linear-gradient(180deg,#f6f1e0,#e9e3cf);border:1px solid #8f8a77;border-radius:6px;position:relative;height:92px;overflow:hidden;box-shadow:inset 0 1px 3px rgba(0,0,0,.25)">
+        <svg width="170" height="92" viewBox="0 0 170 92" style="position:absolute;inset:0;width:100%;height:100%">
+          <path d="M45.2 46.6 L37.5 40.1 M63 32.9 L58.8 23.8 M85 28 L85 18 M107 32.9 L111.2 23.8 M124.8 46.6 L132.5 40.1" stroke="#6b6656" stroke-width="1.6"></path>
+          <path d="M109.1 28.3 A57 57 0 0 1 128.7 43.4" fill="none" stroke="#c8452e" stroke-width="3.5"></path>
+        </svg>
+        <div ref="{{needleRef}}" style="position:absolute;left:50%;bottom:10px;width:2px;height:56px;margin-left:-1px;background:#1c1a14;transform-origin:50% 100%;transform:rotate(-50deg)"></div>
+        <div style="position:absolute;left:50%;bottom:6px;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:#2a2822"></div>
+        <div style="position:absolute;bottom:4px;right:8px;font:600 7px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#6b6656">VU · OUT</div>
+      </div>
+      <div onPointerDown="{{masterDown}}" style="display:flex;flex-direction:column;align-items:center;gap:5px;cursor:ns-resize;user-select:none;touch-action:none">
+        <div style="width:58px;height:58px;border-radius:50%;background:radial-gradient(circle at 35% 28%,#403e38,#15140f 72%);box-shadow:0 3px 6px rgba(0,0,0,.4),inset 0 1px 2px rgba(255,255,255,.18);position:relative">
+          <div style="{{masterPtr}}"></div>
+        </div>
+        <div style="font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.16em;color:#4a463a">MASTER · {{masterVal}}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.16em;color:#4a463a">DRONE</div>
+        <div onClick="{{toggleDrone}}" style="width:20px;height:34px;background:linear-gradient(180deg,#211f19,#161511);border-radius:4px;box-shadow:inset 0 2px 3px #000;position:relative;cursor:pointer"><div style="{{droneLever}}"></div></div>
+      </div>
+      <div style="display:flex;gap:14px;align-items:center">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+          <div onClick="{{mutate}}" style="width:44px;height:44px;border-radius:50%;background:radial-gradient(circle at 38% 30%,#c8452e,#7d1f12 75%);box-shadow:0 3px 6px rgba(0,0,0,.45),inset 0 2px 3px rgba(255,255,255,.25);cursor:pointer" style-active="transform:translateY(2px);box-shadow:0 1px 3px rgba(0,0,0,.45)"></div>
+          <div style="font:600 7.5px 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#4a463a">MUTATE</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+          <div onClick="{{togglePerf}}" style="width:44px;height:30px;border-radius:5px;background:linear-gradient(180deg,#efe9d8,#cfc9b6);border:1px solid #8f8a77;box-shadow:0 2px 3px rgba(0,0,0,.3);cursor:pointer;display:grid;place-items:center" style-active="transform:translateY(1px)"><svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M1 4.5V1h3.5M11 7.5V11H7.5" stroke="#4a463a" stroke-width="1.4" stroke-linecap="round"></path></svg></div>
+          <div style="font:600 7.5px 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#4a463a">FOCUS</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <sc-if value="{{ui}}" hint-placeholder-val="{{ true }}">
+  <div style="display:flex;flex-direction:column;gap:16px">
+
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;border:1px solid #a49e8c;border-radius:8px;background:rgba(255,255,255,.14);padding:12px 16px">
+      <div style="font:600 8.5px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#4a463a">SIGNAL<br>GENERATOR</div>
+      <div onPointerDown="{{selDown}}" style="width:62px;height:62px;border-radius:50%;background:radial-gradient(circle at 35% 28%,#45433c,#131210 74%);box-shadow:0 4px 8px rgba(0,0,0,.45),inset 0 1px 2px rgba(255,255,255,.18);position:relative;cursor:ns-resize;touch-action:none;user-select:none">
+        <div style="{{selPtr}}"></div>
+      </div>
+      <div onClick="{{selNext}}" style="background:#17160f;color:#ffb454;font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.12em;padding:8px 14px;border-radius:4px;box-shadow:inset 0 1px 4px #000;cursor:pointer;min-width:130px;text-align:center" title="Click to cycle">{{selName}}</div>
+      <div style="flex:1;min-width:220px;font:400 8.5px 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#6d6858">{{genHint}}</div>
+    </div>
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:stretch">
+      <sc-for list="{{banks}}" as="b" hint-placeholder-count="5">
+        <div style="flex:1;min-width:200px;border:1px solid #a49e8c;border-radius:8px;background:rgba(255,255,255,.14);padding:10px 12px 12px">
+          <div style="font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#4a463a;margin-bottom:10px;border-bottom:1px solid rgba(74,70,58,.25);padding-bottom:5px">{{b.label}}</div>
+          <div style="display:flex;gap:4px 2px;flex-wrap:wrap;justify-content:center">
+            <sc-for list="{{b.params}}" as="p" hint-placeholder-count="5">
+              <div onPointerDown="{{p.onDown}}" style="display:flex;flex-direction:column;align-items:center;gap:4px;cursor:ns-resize;user-select:none;touch-action:none;width:74px;padding:2px 0">
+                <div style="width:44px;height:44px;border-radius:50%;background:radial-gradient(circle at 35% 28%,#403e38,#15140f 72%);box-shadow:0 3px 5px rgba(0,0,0,.4),inset 0 1px 2px rgba(255,255,255,.18);position:relative">
+                  <div style="{{p.ptr}}"></div>
+                </div>
+                <span style="font:600 7px 'IBM Plex Mono',monospace;letter-spacing:.1em;color:#4a463a;white-space:nowrap">{{p.label}}</span>
+                <span style="background:#17160f;color:#ffb454;font:500 8px 'IBM Plex Mono',monospace;padding:2px 6px;border-radius:2px;box-shadow:inset 0 1px 3px #000;white-space:nowrap">{{p.val}}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;font:500 7.5px 'IBM Plex Mono',monospace;letter-spacing:.08em;color:#8a8574">
+      <span style="color:#8a5a1e">⚠ HIGH FREQUENCIES — START WITH MASTER LOW, RAISE GENTLY</span>
+      <span>OSCISYNTH TYPE 465 · POLYPHONIC XY ENGINE · 10 GENERATORS · A–K WHITE · W E T Y U BLACK · Z/X OCTAVE</span>
+    </div>
+  </div>
+  </sc-if>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;scanlines&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Screen&quot;},&quot;glassReflection&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Screen&quot;}}">
+class Component extends DCLogic {
+  state = { power:false, drone:true, gen:'lissajous', octBase:48, playing:false, loop:false, hueFollow:true, midiName:'', midiDur:0, perf:false, warm:false, tick:0 };
+  constructor(props){
+    super(props);
+    this.TAU = Math.PI*2;
+    this.CTLS = [
+      ['sig','baseFreq','DRONE FREQ',20,500,0.01,50, v=>v.toFixed(1)+' Hz'],
+      ['sig','drawSpd','DRAW SPEED',0.1,8,0.001,1.0, v=>v.toFixed(3)+'×'],
+      ['sig','phOff','ST PHASE',0,1,0.001,0.25, v=>(v*360).toFixed(0)+'°'],
+      ['sig','attack','ATTACK',0.003,2,0.001,0.012, v=>(v*1000).toFixed(0)+' ms'],
+      ['sig','release','RELEASE',0.02,4,0.001,0.35, v=>v.toFixed(2)+' s'],
+      ['mod','xHarm','X HARM',0.25,16,0.001,3.0, v=>v.toFixed(3)],
+      ['mod','yHarm','Y HARM',0.25,16,0.001,4.0, v=>v.toFixed(3)],
+      ['mod','zHarm','Z HARM',0,8,0.001,2.0, v=>v.toFixed(3)],
+      ['mod','morph','MORPH',0,1,0.001,0.5, v=>v.toFixed(3)],
+      ['mod','fmRate','FM RATE',0,40,0.01,0, v=>v.toFixed(2)+' Hz'],
+      ['mod','fmDepth','FM DEPTH',0,0.5,0.001,0, v=>v.toFixed(3)],
+      ['rot','rotX','ROT X',-1,1,0.001,-0.55, v=>v.toFixed(3)],
+      ['rot','rotY','ROT Y',-1,1,0.001,0.8, v=>v.toFixed(3)],
+      ['rot','rotZ','ROT Z',-1,1,0.001,0.5, v=>v.toFixed(3)],
+      ['rot','persp','PERSPECT',1.5,6,0.01,3, v=>v.toFixed(2)],
+      ['rot','zoom','ZOOM',0.4,2,0.001,1, v=>v.toFixed(3)+'×'],
+      ['tex','drive','FOLD DRIVE',0,1,0.001,0, v=>v.toFixed(3)],
+      ['tex','smooth','SMOOTHING',0,1,0.001,0.15, v=>v.toFixed(3)],
+      ['tex','jitter','JITTER',0,1,0.001,0, v=>v.toFixed(3)],
+      ['pho','hue','TRACE HUE',0,360,1,128, v=>v.toFixed(0)+'°'],
+      ['pho','glow','GLOW',0.2,3,0.01,1.1, v=>v.toFixed(2)],
+      ['pho','persist','PERSIST',0,0.97,0.001,0.55, v=>v.toFixed(3)],
+      ['pho','beamW','BEAM W',0.5,3,0.01,1.2, v=>v.toFixed(2)+' px'],
+      ['pho','traceN','TRACE LEN',256,4096,64,1536, v=>v.toFixed(0)],
+    ];
+    this.P = { master:0.5 };
+    this.CTLS.forEach(c=>this.P[c[1]]=c[6]);
+    this.GENS = [
+      ['lissajous','LISSAJOUS','Lissajous Matrix — X/Y/Z harmonics = per-axis ratios · chords weave interference webs'],
+      ['hyperstar','HYPER STAR','Hyper Star — X harmonic = star points · Y = z-wobble · Morph = spike depth'],
+      ['cube','CUBE','3D Wireframe Cube — each note traces its own cube · X harmonic = edge ripple'],
+      ['torus','TORUS','Quantum Torus — X/Y harmonics = knot winding (p,q) · Morph = tube thickness'],
+      ['spiro','SPIRO','Spiro Cascade — hypotrochoid gears · X harmonic = ring ratio · Morph = pen reach'],
+      ['helix','HELIX','DNA Helix — double-strand braid · X harmonic = twist count · Morph = strand ripple'],
+      ['mobius','MÖBIUS','Möbius Ribbon — one-sided band edge · X harmonic = half-twists · Morph = band width'],
+      ['super','BLOOM','Superformula Bloom — Gielis supershape · X harmonic = symmetry m · Morph = spike exponent'],
+      ['butterfly','BUTTERFLY','Neon Butterfly — Temple Fay curve · X harmonic = wing beats (try 4) · Morph = wing detail'],
+      ['lorenz','LORENZ','Strange Attractor — Lorenz chaos, pitch approximate · X harmonic = flow speed · Morph = ρ turbulence'],
+    ];
+    this.MAXV=11; this.voices=[];
+    for(let i=0;i<this.MAXV;i++)this.voices.push({note:-1,freq:50,gate:false,env:0,vel:1,px:0,py:0,pz:0,s:0,age:0,lx:0.4,ly:0.2,lz:12});
+    this.voiceAge=0; this.ctx=null; this.node=null; this.running=false;
+    this.fmPh=0; this.ax=0; this.ay=0; this.az=0; this.lpX=0; this.lpY=0; this.curGain=0; this.outPeak=0;
+    this.RING=16384; this.RM=this.RING-1;
+    this.ringX=new Float32Array(this.RING); this.ringY=new Float32Array(this.RING); this.rw=0;
+    this.CV=[[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
+    this.TOUR=[0,1,5,4,0,3,7,4,5,6,7,3,2,6,2,1];
+    this.midiEvents=[]; this.midiDur=0; this.evIdx=0; this.songTime=0; this.midiPlaying=false;
+    this.hueOffSm=0; this.meterVal=0; this.ptrNotes={}; this.kbdHeld={};
+    this.DOTCOLS=[
+      ['radial-gradient(circle at 40% 35%,#b8ffd4,#2dbb6e)','0 0 6px rgba(60,220,130,.8)'],
+      ['radial-gradient(circle at 40% 35%,#fff3b0,#e0b81c)','0 0 6px rgba(230,190,40,.8)'],
+      ['radial-gradient(circle at 40% 35%,#ffc4b2,#e03a20)','0 0 6px rgba(235,85,55,.8)'],
+    ];
+    this._refs={};
+    ['beamRef','fpsRef','needleRef','fileRef','seekThumbRef','timeRef','dotsRef'].forEach(n=>{ this[n]=el=>{this._refs[n]=el; if(n==='beamRef'&&el)this.sizeBeam();}; });
+  }
+  mtof(n){return 440*Math.pow(2,(n-69)/12);}
+  meterDot(i,lv){ const on=lv*10>=i+0.5, c=this.DOTCOLS[i<5?0:i<8?1:2]; return {bg:on?c[0]:'#8f8a77', sh:on?c[1]:'inset 0 1px 1px rgba(0,0,0,.3)'}; }
+  shape(v,finc){
+    const TAU=this.TAU,P=this.P,gen=this.state.gen; let x,y,z; const m=P.morph;
+    if(gen==='lissajous'){ x=Math.sin(TAU*v.px); y=Math.sin(TAU*(v.py+P.phOff)); z=P.zHarm>0?Math.sin(TAU*v.pz):0; }
+    else if(gen==='hyperstar'){ const th=TAU*v.s; const r=(1-m)+m*Math.cos(P.xHarm*th); x=r*Math.cos(th); y=r*Math.sin(th); z=0.45*Math.sin(P.yHarm*th)*m; }
+    else if(gen==='cube'){ const u=(v.s-Math.floor(v.s))*16; const i=u|0,f=u-i; const a=this.CV[this.TOUR[i]],b=this.CV[this.TOUR[(i+1)&15]]; const rip=Math.sin(TAU*f*P.xHarm)*0.12*m; x=(a[0]+(b[0]-a[0])*f)*0.62+rip; y=(a[1]+(b[1]-a[1])*f)*0.62+rip*0.6; z=(a[2]+(b[2]-a[2])*f)*0.62; }
+    else if(gen==='torus'){ const th=TAU*v.s,tube=0.15+m*0.75; const r=Math.cos(P.yHarm*th)*tube+1.6; x=r*Math.cos(P.xHarm*th)*0.5; y=r*Math.sin(P.xHarm*th)*0.5; z=Math.sin(P.yHarm*th)*tube*1.15; }
+    else if(gen==='spiro'){ const th=TAU*v.s; const k=Math.max(0.25,P.xHarm); const r=1/(1+k); const d=r*(0.2+m*1.6); x=((1-r)*Math.cos(th)+d*Math.cos(k*th))*0.72; y=((1-r)*Math.sin(th)-d*Math.sin(k*th))*0.72; z=0.4*Math.sin(P.yHarm*th)*m; }
+    else if(gen==='helix'){ const phi=TAU*v.s; const c=v.s/(2*Math.max(P.xHarm,0.25)); const fr=c-Math.floor(c); const yy=fr<0.5?(4*fr-1):(3-4*fr); const flip=fr<0.5?0:Math.PI; const rr=0.5+0.3*m*Math.cos(TAU*v.s*P.yHarm*0.5); x=rr*Math.cos(phi+flip); z=rr*Math.sin(phi+flip); y=yy*0.8; }
+    else if(gen==='mobius'){ const th=TAU*v.s; const w=(0.22+0.42*m)*(1+0.25*Math.sin(P.yHarm*th)); const half=P.xHarm*th*0.5; const rr=1+w*Math.cos(half); x=rr*Math.cos(th)*0.55; y=rr*Math.sin(th)*0.55; z=w*Math.sin(half)*1.1; }
+    else if(gen==='super'){ const th=TAU*v.s; const n1=0.3+m*3; const a=Math.pow(Math.abs(Math.cos(P.xHarm*th/4)),1.7)+Math.pow(Math.abs(Math.sin(P.xHarm*th/4)),1.7); let r=Math.pow(a,-1/n1); if(r>2.2)r=2.2; x=r*Math.cos(th)*0.6; y=r*Math.sin(th)*0.6; z=0.35*Math.sin(P.yHarm*th)*m; }
+    else if(gen==='butterfly'){ const th=TAU*v.s; const r=Math.exp(Math.sin(th))-2*Math.cos(P.xHarm*th)+m*Math.pow(Math.sin((2*th-Math.PI)/24),5); x=r*Math.sin(th)*0.23; y=(r*Math.cos(th)-0.6)*0.23; z=0.3*Math.sin(P.yHarm*th*0.5); }
+    else { const dt=Math.min(0.013,finc*(0.25+P.xHarm*0.12)); const rho=18+m*30; let lx=v.lx,ly=v.ly,lz=v.lz; lx+=dt*10*(ly-lx); ly+=dt*(v.lx*(rho-lz)-ly); lz+=dt*(v.lx*v.ly-(8/3)*lz); if(!isFinite(lx+ly+lz)||Math.abs(lx)>1e3){lx=0.4;ly=0.2;lz=12;} v.lx=lx;v.ly=ly;v.lz=lz; x=lx/22; y=(lz-(rho-1))/26; z=ly/26; }
+    return [x,y,z];
+  }
+  allocVoice(){
+    for(let i=1;i<this.MAXV;i++){const v=this.voices[i]; if(!v.gate&&v.env<0.001)return v;}
+    let best=this.voices[1];
+    for(let i=2;i<this.MAXV;i++){const v=this.voices[i]; if(v.env<best.env-0.01||(!v.gate&&best.gate))best=v; if(v.age<best.age&&!best.gate===!v.gate&&Math.abs(v.env-best.env)<0.01)best=v;}
+    return best;
+  }
+  noteOn(note,vel,fromMidi){
+    if(!this.running&&!fromMidi)this.power(true);
+    if(this.state.drone)this.setDrone(false);
+    const v=this.allocVoice();
+    v.note=note; v.freq=this.mtof(note); v.gate=true; v.vel=0.25+0.75*vel;
+    v.px=0;v.py=0;v.pz=0;v.s=0; v.age=this.voiceAge++;
+    v.lx=0.4+Math.random()*0.3; v.ly=0.2; v.lz=12+Math.random()*8;
+  }
+  noteOff(note){ for(let i=1;i<this.MAXV;i++){const v=this.voices[i]; if(v.gate&&v.note===note)v.gate=false;} }
+  allNotesOff(){ for(let i=1;i<this.MAXV;i++)this.voices[i].gate=false; }
+  readVar(d,p){let v=0,b;do{b=d.getUint8(p.i++);v=(v<<7)|(b&0x7f);}while(b&0x80);return v;}
+  parseMidi(buf){
+    const d=new DataView(buf);
+    if(d.getUint32(0)!==0x4D546864)throw new Error('Not a MIDI file');
+    const ntrks=d.getUint16(10),division=d.getUint16(12);
+    let raw=[]; let pos=14;
+    for(let t=0;t<ntrks;t++){
+      if(d.getUint32(pos)!==0x4D54726B)break;
+      const len=d.getUint32(pos+4); const end=pos+8+len; const p={i:pos+8};
+      let tick=0,status=0;
+      while(p.i<end){
+        tick+=this.readVar(d,p);
+        let b=d.getUint8(p.i);
+        if(b&0x80){status=b;p.i++;}else if(status<0x80)break;
+        const type=status&0xf0,ch=status&0x0f;
+        if(status===0xFF){
+          const mt=d.getUint8(p.i++),mlen=this.readVar(d,p);
+          if(mt===0x51&&mlen===3){ const us=(d.getUint8(p.i)<<16)|(d.getUint8(p.i+1)<<8)|d.getUint8(p.i+2); raw.push({tick,pri:0,tempo:us}); }
+          p.i+=mlen; if(mt===0x2F)break;
+        }else if(status===0xF0||status===0xF7){ p.i+=this.readVar(d,p); }
+        else if(type===0x90){ const n=d.getUint8(p.i++),v=d.getUint8(p.i++); raw.push(v>0?{tick,pri:2,on:true,note:n,vel:v/127,ch}:{tick,pri:1,on:false,note:n,ch}); }
+        else if(type===0x80){ const n=d.getUint8(p.i++);p.i++; raw.push({tick,pri:1,on:false,note:n,ch}); }
+        else if(type===0xC0||type===0xD0){p.i+=1;} else{p.i+=2;}
+      }
+      pos+=8+len;
+    }
+    raw.sort((a,b)=>a.tick-b.tick||a.pri-b.pri);
+    const evs=[]; let time=0,lastTick=0,usPerQ=500000;
+    const smpte=(division&0x8000)!==0;
+    const tpq=smpte?0:(division||480);
+    const secPerTickSMPTE=smpte?1/(((256-(division>>8))&0xFF)*(division&0xFF)):0;
+    for(const e of raw){
+      time+=smpte?(e.tick-lastTick)*secPerTickSMPTE:(e.tick-lastTick)*usPerQ/(tpq*1e6);
+      lastTick=e.tick;
+      if(e.tempo!==undefined){usPerQ=e.tempo;continue;}
+      if(e.ch===9)continue;
+      evs.push({t:time,on:e.on,note:e.note,vel:e.vel||0});
+    }
+    return {events:evs,dur:time};
+  }
+  fmtTime(s){s=Math.max(0,s);return (s/60|0)+':'+String(s%60|0).padStart(2,'0');}
+  seekTo(t){ this.allNotesOff(); this.songTime=t; this.evIdx=0; while(this.evIdx<this.midiEvents.length&&this.midiEvents[this.evIdx].t<t)this.evIdx++; }
+  setPlaying(on){ this.midiPlaying=on&&this.midiEvents.length>0; if(!on)this.allNotesOff(); this.setState({playing:this.midiPlaying}); }
+  process(e){
+    const P=this.P,TAU=this.TAU;
+    const L=e.outputBuffer.getChannelData(0),R=e.outputBuffer.getChannelData(1);
+    const n=L.length,sr=this.ctx.sampleRate;
+    const targetGain=P.master*P.master;
+    const ROT=2.6/sr;
+    const cut=Math.exp(-TAU*(400+(1-P.smooth)*11000)/sr);
+    const dk=1+P.drive*5,dnorm=Math.tanh(dk);
+    const aC=1-Math.exp(-1/(P.attack*sr)),rC=Math.exp(-1/(P.release*sr));
+    const dv=this.voices[0];
+    dv.gate=this.state.drone&&this.running; dv.freq=P.baseFreq; dv.vel=1; if(dv.note<0)dv.note=0;
+    let blockPeak=0;
+    for(let i=0;i<n;i++){
+      if(this.midiPlaying){
+        this.songTime+=1/sr;
+        while(this.evIdx<this.midiEvents.length&&this.midiEvents[this.evIdx].t<=this.songTime){
+          const ev=this.midiEvents[this.evIdx++];
+          if(ev.on)this.noteOn(ev.note,ev.vel,true); else this.noteOff(ev.note);
+        }
+        if(this.evIdx>=this.midiEvents.length&&this.songTime>this.midiDur+0.3){
+          if(this.state.loop)this.seekTo(0); else this.setPlaying(false);
+        }
+      }
+      this.fmPh+=P.fmRate/sr; if(this.fmPh>=1)this.fmPh-=1;
+      const fmMod=1+P.fmDepth*Math.sin(TAU*this.fmPh);
+      this.ax=(this.ax+P.rotX*ROT)%TAU; this.ay=(this.ay+P.rotY*ROT)%TAU; this.az=(this.az+P.rotZ*ROT)%TAU;
+      const cY=Math.cos(this.ay),sY=Math.sin(this.ay),cX=Math.cos(this.ax),sX=Math.sin(this.ax),cZ=Math.cos(this.az),sZ=Math.sin(this.az);
+      let sumX=0,sumY=0,nact=0;
+      for(let vi=0;vi<this.MAXV;vi++){
+        const v=this.voices[vi];
+        if(v.gate)v.env+=(1-v.env)*aC; else v.env*=rC;
+        if(v.env<0.0005)continue;
+        nact++;
+        const f=v.freq*P.drawSpd*fmMod;
+        v.px+=f*P.xHarm/sr; if(v.px>=1)v.px-=1;
+        v.py+=f*P.yHarm/sr; if(v.py>=1)v.py-=1;
+        v.pz+=f*P.zHarm/sr; if(v.pz>=1)v.pz-=1;
+        v.s+=f/sr;
+        const sh=this.shape(v,f/sr);
+        let x=sh[0],y=sh[1],z=sh[2];
+        const x1=x*cY+z*sY, z1=-x*sY+z*cY;
+        const y1=y*cX-z1*sX, z2=y*sX+z1*cX;
+        const x2=x1*cZ-y1*sZ, y2=x1*sZ+y1*cZ;
+        const zc=Math.max(-P.persp*0.8,Math.min(P.persp*0.8,z2));
+        const k=P.persp/(P.persp-zc)*P.zoom;
+        const a=v.env*v.vel;
+        sumX+=x2*k*a; sumY+=y2*k*a;
+      }
+      const norm=1/(1+0.3*Math.max(0,nact-1));
+      let x=sumX*norm,y=sumY*norm;
+      if(P.drive>0){x=Math.tanh(x*dk)/dnorm;y=Math.tanh(y*dk)/dnorm;}
+      this.lpX+=(x-this.lpX)*(1-cut); this.lpY+=(y-this.lpY)*(1-cut); x=this.lpX;y=this.lpY;
+      if(P.jitter>0){x+=(Math.random()-0.5)*P.jitter*0.08;y+=(Math.random()-0.5)*P.jitter*0.08;}
+      this.ringX[this.rw]=x;this.ringY[this.rw]=y;this.rw=(this.rw+1)&this.RM;
+      this.curGain+=(targetGain-this.curGain)*0.0015;
+      const oL=Math.tanh(x*1.1)*this.curGain*0.85, oR=Math.tanh(y*1.1)*this.curGain*0.85;
+      L[i]=oL;R[i]=oR;
+      const pk=Math.max(Math.abs(oL),Math.abs(oR)); if(pk>blockPeak)blockPeak=pk;
+    }
+    if(blockPeak>this.outPeak)this.outPeak=blockPeak;
+  }
+  async power(on){
+    if(on){
+      if(!this.ctx)this.ctx=new (window.AudioContext||window.webkitAudioContext)();
+      await this.ctx.resume();
+      if(!this.node){this.node=this.ctx.createScriptProcessor(2048,0,2);this.node.onaudioprocess=e=>this.process(e);}
+      this.node.connect(this.ctx.destination);
+      this.running=true;
+    }else{
+      if(this.node)this.node.disconnect();
+      this.setPlaying(false); this.allNotesOff();
+      if(this.ctx)await this.ctx.suspend();
+      this.running=false;
+    }
+    this.setState({power:this.running});
+  }
+  setDrone(on){ this.setState({drone:on}); }
+  sizeBeam(){
+    const cv=this._refs.beamRef; if(!cv)return;
+    const r=cv.parentElement.getBoundingClientRect();
+    this.DPR=Math.min(2,window.devicePixelRatio||1);
+    const w=Math.round(r.width*this.DPR),h=Math.round(r.height*this.DPR);
+    if(w&&h&&(cv.width!==w||cv.height!==h)){ cv.width=w;cv.height=h; }
+  }
+  frame(now){
+    this._raf=requestAnimationFrame(t=>this.frame(t));
+    const cv=this._refs.beamRef; if(!cv||!cv.width)return;
+    const P=this.P,TAU=this.TAU,bctx=cv.getContext('2d'),W=cv.width,H=cv.height,DPR=this.DPR||1;
+    this._fAcc=(this._fAcc||0)+(now-(this._lastT||now)); this._fCnt=(this._fCnt||0)+1; this._lastT=now;
+    if(this._fCnt>=30){ if(this._refs.fpsRef)this._refs.fpsRef.textContent=(1000/(this._fAcc/this._fCnt)).toFixed(0)+' FPS'; this._fAcc=0;this._fCnt=0; }
+    this.meterVal=Math.max(this.outPeak,this.meterVal*0.88); this.outPeak=0;
+    if(this._refs.needleRef)this._refs.needleRef.style.transform='rotate('+(-50+100*Math.min(1,this.meterVal*1.15)).toFixed(1)+'deg)';
+    if(this._refs.dotsRef){ const lv=Math.min(1,this.meterVal*1.15), ds=this._refs.dotsRef.querySelectorAll('span'); for(let i=0;i<ds.length;i++){ const d=this.meterDot(i,lv); ds[i].style.background=d.bg; ds[i].style.boxShadow=d.sh; } }
+    if(this.midiEvents.length){
+      if(this._refs.seekThumbRef&&!this._seekDrag)this._refs.seekThumbRef.style.left=Math.min(100,this.songTime/this.midiDur*100)+'%';
+      if(this._refs.timeRef)this._refs.timeRef.textContent=this.fmtTime(this.songTime)+' / '+this.fmtTime(this.midiDur);
+    }
+    let noteSum=0,noteCt=0;
+    for(let i=1;i<this.MAXV;i++){const v=this.voices[i];if(v.env>0.01){noteSum+=v.note;noteCt++;}}
+    const wantHue=this.state.hueFollow&&noteCt>0?Math.max(-100,Math.min(140,(noteSum/noteCt-60)*3.2)):0;
+    this.hueOffSm+=(wantHue-this.hueOffSm)*0.06;
+    if((this._uiCnt=(this._uiCnt||0)+1)>=15){ this._uiCnt=0; this.setState({tick:this.state.tick+1}); }
+    bctx.globalCompositeOperation='source-over';
+    bctx.fillStyle='rgba(4,9,5,'+(1-P.persist).toFixed(3)+')';
+    bctx.fillRect(0,0,W,H);
+    const cx=W/2,cy=H/2,u=Math.min(W,H)/10;
+    bctx.strokeStyle='rgba(130,255,170,0.05)';bctx.lineWidth=1;
+    bctx.beginPath();
+    for(let i=-8;i<=8;i++){bctx.moveTo(cx+i*u,0);bctx.lineTo(cx+i*u,H);bctx.moveTo(0,cy+i*u);bctx.lineTo(W,cy+i*u);}
+    bctx.stroke();
+    bctx.strokeStyle='rgba(130,255,170,0.11)';
+    bctx.beginPath();bctx.moveTo(cx,0);bctx.lineTo(cx,H);bctx.moveTo(0,cy);bctx.lineTo(W,cy);bctx.stroke();
+    if(!this.running)return;
+    const N=Math.min(P.traceN|0,this.RING-2);
+    const sc=Math.min(W,H)*0.4;
+    const start=(this.rw-N)&this.RM;
+    const hue=((P.hue+this.hueOffSm)%360+360)%360;
+    const BK=8,buckets=[];
+    for(let b=0;b<BK;b++)buckets.push(new Path2D());
+    let pxq=cx+this.ringX[start]*sc,pyq=cy-this.ringY[start]*sc;
+    for(let i=1;i<N;i++){
+      const idx=(start+i)&this.RM;
+      const X=cx+this.ringX[idx]*sc,Y=cy-this.ringY[idx]*sc;
+      const dx=X-pxq,dy=Y-pyq;
+      const len=Math.sqrt(dx*dx+dy*dy);
+      let a=P.glow*2.2/(len+1.2); if(a>1)a=1;
+      const b=(a*(BK-1))|0;
+      buckets[b].moveTo(pxq,pyq);buckets[b].lineTo(X,Y);
+      pxq=X;pyq=Y;
+    }
+    bctx.globalCompositeOperation='lighter';
+    bctx.lineCap='round';bctx.lineJoin='round';
+    for(let b=0;b<BK;b++){
+      const a=(b+1)/BK;
+      bctx.strokeStyle='hsla('+hue+',100%,62%,'+(a*0.10).toFixed(3)+')';
+      bctx.lineWidth=P.beamW*DPR*4.5;bctx.stroke(buckets[b]);
+      bctx.strokeStyle='hsla('+hue+',100%,72%,'+(a*0.75).toFixed(3)+')';
+      bctx.lineWidth=P.beamW*DPR;bctx.stroke(buckets[b]);
+    }
+    const hi=(this.rw-1)&this.RM;
+    const hx=cx+this.ringX[hi]*sc,hy=cy-this.ringY[hi]*sc;
+    const g=bctx.createRadialGradient(hx,hy,0,hx,hy,7*DPR);
+    g.addColorStop(0,'hsla('+hue+',100%,90%,.9)');g.addColorStop(1,'hsla('+hue+',100%,60%,0)');
+    bctx.fillStyle=g;bctx.beginPath();bctx.arc(hx,hy,7*DPR,0,TAU);bctx.fill();
+  }
+  dialDown(e,def){
+    e.preventDefault();
+    const [,id,,min,max,step]=def;
+    const el=e.currentTarget; el.setPointerCapture(e.pointerId);
+    const sy=e.clientY, sv=this.P[id];
+    const move=ev=>{
+      let nv=sv+(sy-ev.clientY)/160*(max-min);
+      nv=Math.max(min,Math.min(max,nv));
+      if(step>=1)nv=Math.round(nv/step)*step;
+      this.P[id]=nv; this.setState({});
+    };
+    const up=()=>{el.removeEventListener('pointermove',move);el.removeEventListener('pointerup',up);el.removeEventListener('lostpointercapture',up);};
+    el.addEventListener('pointermove',move);el.addEventListener('pointerup',up);el.addEventListener('lostpointercapture',up);
+  }
+  mutate(){
+    const rnd=(a,b)=>a+Math.random()*(b-a);
+    const target={
+      xHarm:rnd(0.5,9),yHarm:rnd(0.5,9),zHarm:rnd(0,5),morph:rnd(0.15,0.95),
+      rotX:rnd(-0.9,0.9),rotY:rnd(-0.9,0.9),rotZ:rnd(-0.9,0.9),
+      drawSpd:rnd(0.4,2.5),fmRate:Math.random()<0.5?0:rnd(0.2,12),fmDepth:Math.random()<0.5?0:rnd(0.02,0.25),
+      drive:Math.random()<0.6?0:rnd(0.1,0.7),smooth:rnd(0.05,0.5),
+      hue:rnd(0,360),persist:rnd(0.35,0.9),
+    };
+    const from={}; for(const k in target)from[k]=this.P[k];
+    const t0=performance.now();
+    const anim=now=>{
+      const u=Math.min(1,(now-t0)/600), e=1-Math.pow(1-u,3);
+      for(const k in target)this.P[k]=from[k]+(target[k]-from[k])*e;
+      this.setState({});
+      if(u<1)requestAnimationFrame(anim);
+    };
+    requestAnimationFrame(anim);
+  }
+  press(note){ this.noteOn(note,0.85,false); this._down=this._down||{}; this._down[note]=true; this.setState({}); }
+  lift(note){ this.noteOff(note); if(this._down)delete this._down[note]; this.setState({}); }
+  shiftOct(d){
+    const octBase=Math.max(24,Math.min(84,this.state.octBase+d));
+    Object.keys(this.ptrNotes).forEach(pid=>{this.lift(this.ptrNotes[pid]);delete this.ptrNotes[pid];});
+    Object.keys(this.kbdHeld).forEach(code=>{this.lift(this.kbdHeld[code]);delete this.kbdHeld[code];});
+    this.setState({octBase});
+  }
+  componentDidMount(){
+    this._ro=new ResizeObserver(()=>this.sizeBeam());
+    const tryObs=()=>{ if(this._refs.beamRef){this._ro.observe(this._refs.beamRef.parentElement);this.sizeBeam();} else setTimeout(tryObs,100); };
+    tryObs();
+    this._raf=requestAnimationFrame(t=>this.frame(t));
+    this.KMAP={KeyA:0,KeyW:1,KeyS:2,KeyE:3,KeyD:4,KeyF:5,KeyT:6,KeyG:7,KeyY:8,KeyH:9,KeyU:10,KeyJ:11,KeyK:12,KeyO:13,KeyL:14,KeyP:15,Semicolon:16};
+    this._kd=e=>{
+      if(e.repeat)return;
+      const tag=(e.target.tagName||'').toLowerCase();
+      if(tag==='input'||tag==='textarea'||tag==='select')return;
+      if(e.code==='Escape'&&this.state.perf){this.setState({perf:false});return;}
+      if(e.code==='KeyZ'){this.shiftOct(-12);return;}
+      if(e.code==='KeyX'){this.shiftOct(12);return;}
+      if(this.KMAP[e.code]===undefined)return;
+      if(this.kbdHeld[e.code]!=null)return;
+      const n=this.state.octBase+this.KMAP[e.code];
+      this.kbdHeld[e.code]=n;this.press(n);
+    };
+    this._ku=e=>{ if(this.kbdHeld[e.code]!=null){this.lift(this.kbdHeld[e.code]);delete this.kbdHeld[e.code];} };
+    this._pu=e=>{ if(this.ptrNotes[e.pointerId]!=null){this.lift(this.ptrNotes[e.pointerId]);delete this.ptrNotes[e.pointerId];} };
+    window.addEventListener('keydown',this._kd);
+    window.addEventListener('keyup',this._ku);
+    window.addEventListener('pointerup',this._pu);
+    window.addEventListener('pointercancel',this._pu);
+  }
+  componentWillUnmount(){
+    cancelAnimationFrame(this._raf);
+    if(this._ro)this._ro.disconnect();
+    window.removeEventListener('keydown',this._kd);
+    window.removeEventListener('keyup',this._ku);
+    window.removeEventListener('pointerup',this._pu);
+    window.removeEventListener('pointercancel',this._pu);
+    if(this.node)this.node.disconnect();
+    if(this.ctx)this.ctx.close();
+  }
+  renderVals(){
+    const s=this.state,P=this.P;
+    const BANKS=[['sig','SIGNAL'],['mod','MODULATION'],['rot','ROTATION'],['tex','TEXTURE'],['pho','BEAM & PHOSPHOR']];
+    const ptrStyle=(frac,top,h,org)=>({position:'absolute',left:'50%',top:top+'px',width:'3px',height:h+'px',marginLeft:'-1.5px',borderRadius:'2px',background:'#efe9d8',transformOrigin:'50% '+org+'px',transform:'rotate('+(-135+270*frac)+'deg)'});
+    const banks=BANKS.map(([id,label])=>({
+      id,label,
+      params:this.CTLS.filter(c=>c[0]===id).map(def=>{
+        const [,pid,plabel,min,max,,,fmt]=def;
+        const frac=(P[pid]-min)/(max-min);
+        return { id:pid,label:plabel,val:fmt(P[pid]),ptr:ptrStyle(frac,4,12,18),onDown:e=>this.dialDown(e,def) };
+      }),
+    }));
+    const genIdx=Math.max(0,this.GENS.findIndex(g=>g[0]===s.gen));
+    const g=this.GENS[genIdx];
+    // keyboard
+    const isBlack=n=>[1,3,6,8,10].includes(((n%12)+12)%12);
+    const down=this._down||{};
+    const whites=[],blacks=[];let wc=0;
+    for(let n=s.octBase;n<=s.octBase+24;n++){ if(!isBlack(n))whites.push({n,idx:wc++});else blacks.push({n,idx:wc}); }
+    const wW=100/whites.length;
+    const mkKey=(n,left,width,black)=>{
+      const isDown=!!down[n];
+      return {
+        note:n, label:(!black&&n%12===0)?('C'+(n/12-1)):null,
+        onDown:e=>{e.preventDefault();this.ptrNotes[e.pointerId]=n;this.press(n);},
+        onEnter:e=>{ if(e.buttons===0)return; if(this.ptrNotes[e.pointerId]===n)return; if(this.ptrNotes[e.pointerId]!=null)this.lift(this.ptrNotes[e.pointerId]); this.ptrNotes[e.pointerId]=n;this.press(n); },
+        style:black?{
+          position:'absolute',top:0,bottom:'40%',left:left+'%',width:width+'%',zIndex:2,touchAction:'none',cursor:'pointer',
+          borderRadius:'0 0 4px 4px',border:'1px solid #000',
+          background:isDown?'linear-gradient(180deg,#3a372e,#2a2822)':'linear-gradient(180deg,#2a2822,#16140f)',
+          boxShadow:isDown?'inset 0 -1px 2px rgba(0,0,0,.6)':'0 3px 4px rgba(0,0,0,.5)',
+        }:{
+          position:'absolute',top:0,bottom:0,left:left+'%',width:width+'%',zIndex:1,touchAction:'none',cursor:'pointer',
+          borderRadius:'0 0 4px 4px',border:'1px solid #a49e8c',
+          background:isDown?'linear-gradient(180deg,#d9d2bd,#cfc8b2)':'linear-gradient(180deg,#f7f2e4,#e8e2cf)',
+          boxShadow:isDown?'inset 0 2px 4px rgba(0,0,0,.3)':'inset 0 -3px 4px rgba(0,0,0,.12)',
+        },
+      };
+    };
+    const keys=[
+      ...whites.map(w=>mkKey(w.n,w.idx*wW,wW,false)),
+      ...blacks.map(b=>mkKey(b.n,b.idx*wW-wW*0.3,wW*0.6,true)),
+    ];
+    let nact=0;
+    for(let i=1;i<this.MAXV;i++)if(this.voices[i].env>0.01)nact++;
+    const mlv=Math.min(1,this.meterVal*1.15); const voiceDots=[];
+    for(let i=0;i<10;i++){ const d=this.meterDot(i,mlv); voiceDots.push({style:{width:'7px',height:'7px',borderRadius:'50%',background:d.bg,boxShadow:d.sh}}); }
+    const hwBtn=(active,dis)=>({
+      padding:'8px 14px',borderRadius:'5px',cursor:'pointer',font:"600 8.5px 'IBM Plex Mono',monospace",letterSpacing:'.14em',color:'#3b382f',
+      background:active?'linear-gradient(180deg,#cfc9b6,#bfb9a6)':'linear-gradient(180deg,#efe9d8,#cfc9b6)',
+      border:'1px solid #8f8a77',
+      boxShadow:active?'inset 0 2px 4px rgba(0,0,0,.3), 0 0 0 1px rgba(138,90,30,.3)':'0 2px 3px rgba(0,0,0,.3)',
+      opacity:dis?.4:1,
+    });
+    return {
+      ui:!s.perf, warm:s.warm,
+      scan:this.props.scanlines??true,
+      glass:this.props.glassReflection??true,
+      statusText:this.running?('RUNNING · '+(this.ctx.sampleRate/1000).toFixed(1)+' kHz · '+nact+' VOICE'+(nact===1?'':'S')):'STANDBY — FLIP POWER OR PLAY A KEY',
+      voiceDots, banks, keys,
+      genHint:g[2],
+      selName:g[1],
+      selPtr:ptrStyle(genIdx/(this.GENS.length-1),6,16,25),
+      selNext:()=>this.setState({gen:this.GENS[(genIdx+1)%this.GENS.length][0]}),
+      selDown:e=>{
+        e.preventDefault();
+        const el=e.currentTarget; el.setPointerCapture(e.pointerId);
+        const sy=e.clientY, si=genIdx;
+        const move=ev=>{
+          const ni=Math.max(0,Math.min(this.GENS.length-1,si+Math.round((sy-ev.clientY)/24)));
+          if(this.GENS[ni][0]!==this.state.gen)this.setState({gen:this.GENS[ni][0]});
+        };
+        const up=()=>{el.removeEventListener('pointermove',move);el.removeEventListener('pointerup',up);el.removeEventListener('lostpointercapture',up);};
+        el.addEventListener('pointermove',move);el.addEventListener('pointerup',up);el.addEventListener('lostpointercapture',up);
+      },
+      masterVal:(P.master*100).toFixed(0)+'%',
+      masterPtr:ptrStyle(P.master,5,15,24),
+      masterDown:e=>this.dialDown(e,['','master','MASTER',0,1,0.001,0.5,v=>v]),
+      pilotStyle:{width:'12px',height:'12px',borderRadius:'50%',
+        background:this.running?'radial-gradient(circle at 40% 35%,#ffd28a,#e08a1c)':'#57534a',
+        boxShadow:this.running?'0 0 12px rgba(255,178,60,.85), inset 0 0 3px rgba(120,60,0,.6)':'inset 0 1px 2px rgba(0,0,0,.4)'},
+      leverStyle:{position:'absolute',left:'5px',top:s.power?'4px':'22px',transition:'top .12s',width:'16px',height:'18px',borderRadius:'3px',background:'linear-gradient(180deg,#e3dccb,#a49e8c)',boxShadow:'0 2px 3px rgba(0,0,0,.5)'},
+      droneLever:{position:'absolute',left:'4px',top:s.drone?'3px':'17px',transition:'top .12s',width:'12px',height:'14px',borderRadius:'2px',background:'linear-gradient(180deg,#e3dccb,#a49e8c)',boxShadow:'0 1px 2px rgba(0,0,0,.5)'},
+      togglePower:()=>this.power(!this.running),
+      togglePerf:()=>this.setState({perf:!s.perf}),
+      toggleDrone:()=>this.setDrone(!s.drone),
+      mutate:()=>this.mutate(),
+      octDown:()=>this.shiftOct(-12), octUp:()=>this.shiftOct(12),
+      octLabel:'C'+(s.octBase/12-1)+' – C'+(s.octBase/12+1),
+      btnOct:hwBtn(false),
+      fileRef:this.fileRef, seekThumbRef:this.seekThumbRef, timeRef:this.timeRef,
+      beamRef:this.beamRef, fpsRef:this.fpsRef, needleRef:this.needleRef, dotsRef:this.dotsRef,
+      loadClick:()=>{ if(this._refs.fileRef)this._refs.fileRef.click(); },
+      fileChange:async e=>{
+        const file=e.target.files[0]; if(!file)return;
+        try{
+          const buf=await file.arrayBuffer();
+          const r=this.parseMidi(buf);
+          if(!r.events.length)throw new Error('No playable notes found');
+          this.midiEvents=r.events; this.midiDur=r.dur;
+          this.seekTo(0); this.setPlaying(false);
+          this._midiErr=null;
+          this.setState({midiName:file.name,midiDur:r.dur});
+        }catch(err){ this._midiErr='COULD NOT READ FILE: '+err.message+' — CHOOSE A .MID FILE'; this.setState({}); }
+        e.target.value='';
+      },
+      midiStatus:this._midiErr?this._midiErr:(s.midiName?(s.midiName+' · '+this.midiEvents.filter(x=>x.on).length+' NOTES · '+this.fmtTime(this.midiDur)):'NO FILE LOADED — NOTES PLAY THROUGH THE CURRENT GENERATOR'),
+      playToggle:async()=>{
+        if(!this.midiEvents.length)return;
+        if(!this.midiPlaying){
+          if(!this.running)await this.power(true);
+          if(s.drone)this.setDrone(false);
+          if(this.songTime>=this.midiDur)this.seekTo(0);
+          this.setPlaying(true);
+        }else this.setPlaying(false);
+      },
+      playTxt:s.playing?'PAUSE':'PLAY',
+      btnLoad:hwBtn(false),
+      btnPlay:hwBtn(s.playing,!this.midiEvents.length),
+      btnStop:hwBtn(false,!this.midiEvents.length),
+      btnLoop:hwBtn(s.loop),
+      btnHue:hwBtn(s.hueFollow),
+      stopSong:()=>{this.setPlaying(false);this.seekTo(0);if(this._refs.seekThumbRef)this._refs.seekThumbRef.style.left='0%';},
+      toggleLoop:()=>this.setState({loop:!s.loop}),
+      toggleHue:()=>this.setState({hueFollow:!s.hueFollow}),
+      seekDown:e=>{
+        if(!this.midiEvents.length)return;
+        const track=e.currentTarget; track.setPointerCapture(e.pointerId);
+        this._seekDrag=true;
+        const rect=track.getBoundingClientRect();
+        const upd=ev=>{
+          const frac=Math.max(0,Math.min(1,(ev.clientX-rect.left)/rect.width));
+          if(this._refs.seekThumbRef)this._refs.seekThumbRef.style.left=(frac*100)+'%';
+          if(this._refs.timeRef)this._refs.timeRef.textContent=this.fmtTime(frac*this.midiDur)+' / '+this.fmtTime(this.midiDur);
+          this._seekFrac=frac;
+        };
+        upd(e);
+        const move=ev=>upd(ev);
+        const up=()=>{ this.seekTo((this._seekFrac||0)*this.midiDur); this._seekDrag=false; track.removeEventListener('pointermove',move);track.removeEventListener('pointerup',up);track.removeEventListener('lostpointercapture',up); };
+        track.addEventListener('pointermove',move);track.addEventListener('pointerup',up);track.addEventListener('lostpointercapture',up);
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>
