@@ -96,7 +96,7 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
       <div style="position:absolute;bottom:5px;left:5px;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#96917f,#45412f);box-shadow:inset 0 0 2px #000"><div style="position:absolute;left:1px;right:1px;top:3.5px;height:1.5px;background:#1c1a12;transform:rotate(70deg)"></div></div>
       <div style="position:absolute;bottom:5px;right:5px;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#96917f,#45412f);box-shadow:inset 0 0 2px #000"><div style="position:absolute;left:1px;right:1px;top:3.5px;height:1.5px;background:#1c1a12;transform:rotate(10deg)"></div></div>
       <div style="position:relative;border-radius:14px;overflow:hidden;height:min(46vh,440px);background:radial-gradient(120% 100% at 50% 45%,#0c1f12,#050b06 80%);box-shadow:inset 0 0 40px rgba(0,0,0,.85),inset 0 0 8px #000">
-        <canvas ref="{{beamRef}}" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+        <canvas ref="{{beamRef}}" onPointerDown="{{eqDown}}" onWheel="{{eqWheel}}" style="position:absolute;inset:0;width:100%;height:100%;touch-action:none"></canvas>
         <sc-if value="{{scan}}" hint-placeholder-val="{{ true }}">
           <div style="position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,0,0,.15) 0 1px,transparent 1px 3px)"></div>
         </sc-if>
@@ -149,6 +149,26 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
       <div onClick="{{selNext}}" style="background:#17160f;color:#ffb454;font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.12em;padding:8px 14px;border-radius:4px;box-shadow:inset 0 1px 4px #000;cursor:pointer;min-width:130px;text-align:center" title="Click to cycle">{{selName}}</div>
       <div style="flex:1;min-width:220px;font:400 8.5px 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#6d6858">{{genHint}}</div>
     </div>
+
+    <sc-if value="{{eqAnalyzerOn}}" hint-placeholder-val="{{ true }}">
+    <div style="border:1px solid #a49e8c;border-radius:8px;background:rgba(255,255,255,.14);padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <div style="font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.22em;color:#4a463a">EQ BANDS</div>
+        <sc-for list="{{eqTabs}}" as="t" hint-placeholder-count="4"><div onClick="{{t.pick}}" style="{{t.style}}">{{t.label}}</div></sc-for>
+        <div onClick="{{eqAddBand}}" title="Add a band" style="{{eqBtnStyle}}">+ ADD</div>
+        <div style="width:1px;height:22px;background:#a49e8c;margin:0 2px"></div>
+        <div onClick="{{eqTypeCycle}}" title="Cycle filter type of the selected band" style="{{eqBtnStyle}}">{{eqTypeLabel}}</div>
+        <div onClick="{{eqBandOnToggle}}" title="Enable/bypass the selected band" style="{{eqBtnStyle}}">{{eqBandOnLabel}}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+        <sc-for list="{{eqChips}}" as="c" hint-placeholder-count="3"><div onPointerDown="{{c.down}}" style="{{eqChipStyle}}"><span style="{{eqChipLabelStyle}}">{{c.label}}</span><span style="{{eqChipValStyle}}">{{c.val}}</span></div></sc-for>
+        <div onClick="{{eqDynToggle}}" title="Per-band dynamics on/off" style="{{eqDynBtnStyle}}">DYN</div>
+        <sc-for list="{{eqDynChips}}" as="c" hint-placeholder-count="5"><div onPointerDown="{{c.down}}" style="{{eqChipStyle}}"><span style="{{eqChipLabelStyle}}">{{c.label}}</span><span style="{{eqChipValStyle}}">{{c.val}}</span></div></sc-for>
+        <div style="flex:1;min-width:8px"></div>
+        <sc-for list="{{eqGlobChips}}" as="c" hint-placeholder-count="2"><div onPointerDown="{{c.down}}" style="{{eqChipStyle}}"><span style="{{eqChipLabelStyle}}">{{c.label}}</span><span style="{{eqChipValStyle}}">{{c.val}}</span></div></sc-for>
+      </div>
+    </div>
+    </sc-if>
 
     <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:stretch">
       <sc-for list="{{banks}}" as="b" hint-placeholder-count="5">
@@ -247,6 +267,10 @@ class Component extends DCLogic {
     this.P.fmSync=false; this.P.fmDivision=6; // 6 = '1/4'
     this.FM_DIVS=[{l:'1/1',b:4},{l:'1/2.',b:3},{l:'1/1T',b:8/3},{l:'1/2',b:2},{l:'1/4.',b:1.5},{l:'1/2T',b:4/3},{l:'1/4',b:1},{l:'1/8.',b:0.75},{l:'1/4T',b:2/3},{l:'1/8',b:0.5},{l:'1/16.',b:0.375},{l:'1/8T',b:1/3},{l:'1/16',b:0.25},{l:'1/16T',b:1/6},{l:'1/32',b:0.125},{l:'1/32T',b:1/12},{l:'1/64',b:0.0625}];
     this.midiBpm=120;
+    // --- Phase 2: dynamic EQ (biquad cascade computed in process(); analyzer = the EQ view) ---
+    this.P.eqMix=1; this.P.eqOut=0;
+    this.EQ_TYPES=['bell','low-shelf','high-shelf','low-cut','high-cut','notch','band-pass','tilt'];
+    this.eqBands=this._eqDefaultBands(); this.eqSel=0;
     // --- Phase 0: parameter history (75-step, gesture-coalesced undo/redo) ---
     this.undoStack=[]; this.redoStack=[]; this.UNDO_MAX=75; this._mutTok=0;
     // --- Phase 0: preset banks (user in localStorage; factory/research fetched or imported) ---
@@ -372,6 +396,8 @@ class Component extends DCLogic {
     const dv=this.voices[0];
     dv.gate=this.state.drone&&this.running; dv.freq=P.baseFreq; dv.vel=1; if(dv.note<0)dv.note=0;
     let blockPeak=0;
+    this._eqActive=this.eqBands&&this.eqBands.length>0; if(this._eqActive)this._eqPrep(sr,n);
+    const eqMix=this.P.eqMix, eqOutG=Math.pow(10,this.P.eqOut/20);
     for(let i=0;i<n;i++){
       if(this.midiPlaying){
         this.songTime+=1/sr;
@@ -417,8 +443,19 @@ class Component extends DCLogic {
       this.ringX[this.rw]=x;this.ringY[this.rw]=y;this.rw=(this.rw+1)&this.RM;
       this.curGain+=(targetGain-this.curGain)*0.0015;
       const oL=Math.tanh(x*1.1)*this.curGain*0.85, oR=Math.tanh(y*1.1)*this.curGain*0.85;
-      L[i]=oL;R[i]=oR;
-      const pk=Math.max(Math.abs(oL),Math.abs(oR)); if(pk>blockPeak)blockPeak=pk;
+      let eL=oL,eR=oR;
+      if(this._eqActive){
+        const det=(oL+oR)*0.5;
+        for(let bi=0;bi<this.eqBands.length;bi++){ const bd=this.eqBands[bi]; if(!bd.on||!bd._c)continue; const c=bd._c;
+          let o=c.b0*eL+bd._z1L; bd._z1L=c.b1*eL+bd._z2L-c.a1*o; bd._z2L=c.b2*eL-c.a2*o; eL=o;
+          o=c.b0*eR+bd._z1R; bd._z1R=c.b1*eR+bd._z2R-c.a1*o; bd._z2R=c.b2*eR-c.a2*o; eR=o;
+          if(bd._dc){ const d=bd._dc; const dm=d.b0*det+bd._dz1; bd._dz1=d.b1*det+bd._dz2-d.a1*dm; bd._dz2=d.b2*det-d.a2*dm; bd._acc+=dm*dm; }
+        }
+        eL=(oL*(1-eqMix)+eL*eqMix)*eqOutG; eR=(oR*(1-eqMix)+eR*eqMix)*eqOutG;
+        if(!isFinite(eL))eL=0; if(!isFinite(eR))eR=0;
+      }
+      L[i]=eL;R[i]=eR;
+      const pk=Math.max(Math.abs(eL),Math.abs(eR)); if(pk>blockPeak)blockPeak=pk;
     }
     if(blockPeak>this.outPeak)this.outPeak=blockPeak;
   }
@@ -475,7 +512,21 @@ class Component extends DCLogic {
     } else {
       bctx.fillStyle='rgba(150,255,190,0.3)'; bctx.textAlign='center'; bctx.font=(9*DPR)+"px 'IBM Plex Mono',monospace"; bctx.fillText('POWER ON / PLAY A NOTE TO ANALYZE',W/2,H/2);
     }
-    bctx.fillStyle='rgba(150,255,190,0.5)'; bctx.textAlign='left'; bctx.font="600 "+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.fillText('SPECTRUM · 20Hz–20kHz',10*DPR,14*DPR);
+    // EQ curve + draggable numbered band handles (gain axis +/-18 dB)
+    if(this.eqBands&&this.eqBands.length){
+      const g2y=g=>padT+plotH*(18-g)/36, sr=this.ctx?this.ctx.sampleRate:44100;
+      bctx.strokeStyle='rgba(255,255,255,0.13)'; bctx.lineWidth=1; bctx.beginPath(); bctx.moveTo(padL,g2y(0)); bctx.lineTo(padL+plotW,g2y(0)); bctx.stroke();
+      const cols=Math.max(2,plotW|0);
+      bctx.beginPath();
+      for(let px=0;px<=cols;px++){ const f=Math.pow(10,l0+dec*(px/cols)); let sum=this.P.eqOut||0; for(const b of this.eqBands){ if(b.on&&b._c)sum+=this._eqMagDb(b._c,f,sr); } const y=g2y(Math.max(-18,Math.min(18,sum))); if(px===0)bctx.moveTo(padL,y); else bctx.lineTo(padL+px,y); }
+      bctx.strokeStyle='rgba(255,206,122,0.95)'; bctx.lineWidth=1.6*DPR; bctx.stroke();
+      const COL=['#e0603a','#c8c23a','#3ac8c8','#3aa0e0','#8a6ae0','#e03a9a','#e08a3a','#6ae08a','#d0d0d0','#e0c060','#60c0e0','#c060e0'];
+      for(let i=0;i<this.eqBands.length;i++){ const b=this.eqBands[i]; const hx=f2x(Math.max(20,Math.min(20000,b.freqHz))), hy=g2y(Math.max(-18,Math.min(18,b.gainDb))), col=COL[i%COL.length], rad=(i===this.eqSel?9:7)*DPR;
+        bctx.globalAlpha=(i===this.eqSel?0.95:0.72); bctx.beginPath(); bctx.arc(hx,hy,rad,0,Math.PI*2); bctx.fillStyle=b.on?col:'#4a4a4a'; bctx.fill(); bctx.globalAlpha=1; bctx.lineWidth=(i===this.eqSel?2:1)*DPR; bctx.strokeStyle='#fff'; bctx.stroke();
+        bctx.fillStyle='#111'; bctx.font='700 '+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.textAlign='center'; bctx.textBaseline='middle'; bctx.fillText(''+(i+1),hx,hy); }
+      bctx.textBaseline='alphabetic';
+    }
+    bctx.fillStyle='rgba(150,255,190,0.5)'; bctx.textAlign='left'; bctx.font="600 "+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.fillText('SPECTRUM · 20Hz–20kHz · drag notch · dbl-click add · wheel Q',10*DPR,14*DPR);
   }
   frame(now){
     this._raf=requestAnimationFrame(t=>this.frame(t));
@@ -540,8 +591,8 @@ class Component extends DCLogic {
     bctx.fillStyle=g;bctx.beginPath();bctx.arc(hx,hy,7*DPR,0,TAU);bctx.fill();
   }
   // --- Phase 0: parameter model + history ------------------------------------
-  _pmeta(id){ if(id==='master')return {min:0,max:1,step:0.001}; const c=this.CTLS.find(x=>x[1]===id); return c?{min:c[3],max:c[4],step:c[5]}:null; }
-  _paramIds(){ return this.CTLS.map(c=>c[1]).concat('master','fmSync','fmDivision'); }
+  _pmeta(id){ if(id==='master')return {min:0,max:1,step:0.001}; if(id==='eqMix')return {min:0,max:1,step:0.001}; if(id==='eqOut')return {min:-24,max:24,step:0.1}; const c=this.CTLS.find(x=>x[1]===id); return c?{min:c[3],max:c[4],step:c[5]}:null; }
+  _paramIds(){ return this.CTLS.map(c=>c[1]).concat('master','fmSync','fmDivision','eqMix','eqOut'); }
   snapshot(){ const p={}; this._paramIds().forEach(id=>{ p[id]=this.P[id]; }); return {params:p, gen:this.state.gen}; }
   applySnapshot(s){ if(!s)return; this._mutTok++; if(s.params)this._paramIds().forEach(id=>{ if(s.params[id]!==undefined)this.P[id]=s.params[id]; }); this.setState(s.gen?{gen:s.gen}:{}); }
   pushUndo(before){ this.undoStack.push(before); if(this.undoStack.length>this.UNDO_MAX)this.undoStack.shift(); this.redoStack.length=0; }
@@ -550,7 +601,7 @@ class Component extends DCLogic {
   redo(){ if(!this.redoStack.length)return; this.undoStack.push(this.snapshot()); this.applySnapshot(this.redoStack.pop()); }
   // --- Phase 0: presets -----------------------------------------------------
   _clampParam(id,v){ const m=this._pmeta(id); if(!m)return v; if(typeof v!=='number'||!isFinite(v))return this.P[id]; v=Math.max(m.min,Math.min(m.max,v)); if(m.step>=1)v=Math.round(v/m.step)*m.step; return v; }
-  _defaultParams(){ const p={master:0.5,fmSync:false,fmDivision:6}; this.CTLS.forEach(c=>{ p[c[1]]=c[6]; }); return p; }
+  _defaultParams(){ const p={master:0.5,fmSync:false,fmDivision:6,eqMix:1,eqOut:0}; this.CTLS.forEach(c=>{ p[c[1]]=c[6]; }); return p; }
   _curBank(){ return (this.banks[this.curBankKey]||[]).filter(p=>p&&(p.synth||p.params)); } // hide EQ-only presets until the Phase 2 EQ exists
   applyPreset(p,record){
     if(!p)return;
@@ -577,18 +628,81 @@ class Component extends DCLogic {
       });
       this._loadedEq=p.eq||null;
     } else { this._loadedEq=p.eq||null; }
+    if(p.eq&&Array.isArray(p.eq.bands)){ this.eqBands=p.eq.bands.map(b=>({type:b.type||'bell',freqHz:+b.freqHz||1000,gainDb:+b.gainDb||0,q:+b.q||1,on:b.on!==false,dyn:Object.assign({on:false,mode:'down',threshDb:-24,ratio:2,rangeDb:0,attackMs:10,releaseMs:120},b.dyn||{})})); this.eqSel=Math.max(0,Math.min(this.eqSel,this.eqBands.length-1)); if(typeof p.eq.mix==='number')this.P.eqMix=Math.max(0,Math.min(1,p.eq.mix>1?p.eq.mix/100:p.eq.mix)); if(typeof p.eq.outDb==='number')this.P.eqOut=Math.max(-24,Math.min(24,p.eq.outDb)); }
     const after={params:{},gen:gen}; this._paramIds().forEach(id=>{ after.params[id]=this.P[id]; });
     if(record!==false && JSON.stringify(before)!==JSON.stringify(after))this.pushUndo(before);
     this.setState({gen});
     this._loadedName=p.name||''; this._loadedSnap=after;
   }
   resetToDefault(){ this.presetIdx=-1; this.applyPreset({name:'Init', params:this._defaultParams(), gen:this.GENS[0][0]}); }
-  savePreset(name){ const snap=this.snapshot(); const preset={name:name,v:1,gen:snap.gen,params:snap.params}; this.banks.user.push(preset); this.curBankKey='user'; this.presetIdx=this.banks.user.length-1; this._loadedName=name; this._loadedSnap=snap; this._persistUser(); this.setState({}); }
+  savePreset(name){ const snap=this.snapshot(); const preset={name:name,v:1,gen:snap.gen,params:snap.params,eq:{mix:this.P.eqMix,outDb:this.P.eqOut,bands:this.eqBands.map(b=>({type:b.type,freqHz:b.freqHz,gainDb:b.gainDb,q:b.q,on:b.on,dyn:Object.assign({},b.dyn)}))}}; this.banks.user.push(preset); this.curBankKey='user'; this.presetIdx=this.banks.user.length-1; this._loadedName=name; this._loadedSnap=snap; this._persistUser(); this.setState({}); }
   _persistUser(){ try{ localStorage.setItem('synesthesia_presets_v1', JSON.stringify(this.banks.user)); return true; }catch(e){ console.warn('Synesthesia: user presets could not be saved to localStorage (in-memory only this session):', e); return false; } }
   navPreset(dir){ const bank=this._curBank(); if(!bank.length)return; let i=this.presetIdx; i=(i<0?(dir>0?0:bank.length-1):i+dir); i=((i%bank.length)+bank.length)%bank.length; this.presetIdx=i; this.applyPreset(bank[i]); }
   pickPreset(gi){ const bank=this._curBank(); if(gi>=0&&gi<bank.length){ this.presetIdx=gi; this.applyPreset(bank[gi]); } this.setState({presetOpen:false}); }
   divDown(e){ e.preventDefault(); this._mutTok++; const el=e.currentTarget; el.setPointerCapture(e.pointerId); const sy=e.clientY, si=this.P.fmDivision|0; const before=this.snapshot(); const move=ev=>{ const ni=Math.max(0,Math.min(this.FM_DIVS.length-1,Math.round(si+(sy-ev.clientY)/18))); if(ni!==(this.P.fmDivision|0)){ this.P.fmDivision=ni; this.setState({}); } }; const up=()=>{ this.pushUndoIfChanged(before); el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); }; el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up); }
   toggleSync(){ const before=this.snapshot(); this.P.fmSync=!this.P.fmSync; this.pushUndo(before); this.setState({}); }
+  // --- Phase 2: EQ (RBJ biquads + per-block dynamics) -----------------------
+  _eqDefaultBands(){ const d=()=>({on:false,mode:'down',threshDb:-24,ratio:2,rangeDb:0,attackMs:10,releaseMs:120}); return [
+    {type:'bell',freqHz:120,gainDb:0,q:1,on:true,dyn:d()},{type:'bell',freqHz:500,gainDb:0,q:1,on:true,dyn:d()},
+    {type:'bell',freqHz:2000,gainDb:0,q:1.2,on:true,dyn:d()},{type:'bell',freqHz:6000,gainDb:0,q:1,on:true,dyn:d()} ]; }
+  _eqCoeffs(type,f,gainDb,q,sr){
+    const w0=2*Math.PI*Math.max(10,Math.min(sr*0.49,f))/sr, cw=Math.cos(w0), sw=Math.sin(w0);
+    const A=Math.pow(10,gainDb/40); q=Math.max(0.1,q); const alpha=sw/(2*q);
+    let b0,b1,b2,a0,a1,a2;
+    switch(type){
+      case 'low-cut': b0=(1+cw)/2; b1=-(1+cw); b2=(1+cw)/2; a0=1+alpha; a1=-2*cw; a2=1-alpha; break;
+      case 'high-cut': b0=(1-cw)/2; b1=1-cw; b2=(1-cw)/2; a0=1+alpha; a1=-2*cw; a2=1-alpha; break;
+      case 'notch': b0=1; b1=-2*cw; b2=1; a0=1+alpha; a1=-2*cw; a2=1-alpha; break;
+      case 'band-pass': b0=alpha; b1=0; b2=-alpha; a0=1+alpha; a1=-2*cw; a2=1-alpha; break;
+      case 'low-shelf': { const s=2*Math.sqrt(A)*alpha; b0=A*((A+1)-(A-1)*cw+s); b1=2*A*((A-1)-(A+1)*cw); b2=A*((A+1)-(A-1)*cw-s); a0=(A+1)+(A-1)*cw+s; a1=-2*((A-1)+(A+1)*cw); a2=(A+1)+(A-1)*cw-s; break; }
+      case 'high-shelf': case 'tilt': { const s=2*Math.sqrt(A)*alpha; b0=A*((A+1)+(A-1)*cw+s); b1=-2*A*((A-1)+(A+1)*cw); b2=A*((A+1)+(A-1)*cw-s); a0=(A+1)-(A-1)*cw+s; a1=2*((A-1)-(A+1)*cw); a2=(A+1)-(A-1)*cw-s; break; }
+      default: b0=1+alpha*A; b1=-2*cw; b2=1-alpha*A; a0=1+alpha/A; a1=-2*cw; a2=1-alpha/A; break;
+    }
+    return {b0:b0/a0,b1:b1/a0,b2:b2/a0,a1:a1/a0,a2:a2/a0};
+  }
+  _eqMagDb(c,f,sr){ const w=2*Math.PI*f/sr, phi=Math.sin(w/2)**2; const {b0,b1,b2,a1,a2}=c;
+    const num=(b0+b1+b2)**2-4*(b0*b1+4*b0*b2+b1*b2)*phi+16*b0*b2*phi*phi;
+    const den=(1+a1+a2)**2-4*(a1+4*a2+a1*a2)*phi+16*a2*phi*phi; return 10*Math.log10(Math.max(1e-9,num)/Math.max(1e-9,den)); }
+  _eqPrep(sr,n){
+    for(const bd of this.eqBands){
+      if(bd._z1L===undefined){ bd._z1L=bd._z2L=bd._z1R=bd._z2R=0; bd._dz1=bd._dz2=0; bd._acc=0; bd._gr=0; }
+      let g=bd.gainDb;
+      if(bd.dyn&&bd.dyn.on){
+        const rms=Math.sqrt((bd._acc||0)/Math.max(1,n)); bd._acc=0;
+        const db=20*Math.log10(Math.max(1e-6,rms)); const dt=n/sr;
+        const over=db-bd.dyn.threshDb; let target=0;
+        if(over>0){ target=over*(1-1/Math.max(1,bd.dyn.ratio)); const cap=Math.abs(bd.dyn.rangeDb); if(target>cap)target=cap; }
+        target*=(bd.dyn.rangeDb<0||bd.dyn.mode==='down')?-1:1;
+        const cf=1-Math.exp(-dt/Math.max(0.0005,((target<(bd._gr||0))?bd.dyn.attackMs:bd.dyn.releaseMs)/1000));
+        bd._gr=(bd._gr||0)+(target-(bd._gr||0))*cf; g=bd.gainDb+bd._gr;
+        bd._dc=this._eqCoeffs('band-pass',bd.freqHz,0,Math.max(1,bd.q),sr);
+      } else { bd._gr=0; bd._dc=null; }
+      bd._c=this._eqCoeffs(bd.type,bd.freqHz,g,bd.q,sr); bd._geff=g;
+    }
+  }
+  _eqAdd(f,g){ this.eqBands.push({type:'bell',freqHz:Math.max(20,Math.min(20000,f||1000)),gainDb:Math.max(-12,Math.min(12,g||0)),q:1,on:true,dyn:{on:false,mode:'down',threshDb:-24,ratio:2,rangeDb:0,attackMs:10,releaseMs:120}}); this.eqSel=this.eqBands.length-1; this.setState({}); }
+  eqDown(e){
+    if(this.state.scopeMode!=='analyzer')return;
+    const cv=e.currentTarget, rect=cv.getBoundingClientRect();
+    const padL=10,padR=10,padT=10,padB=16, plotW=rect.width-padL-padR, plotH=rect.height-padT-padB, l0=Math.log10(20);
+    const x2f=x=>Math.pow(10,l0+3*((x-padL)/plotW)), y2g=y=>18-(y-padT)/plotH*36;
+    const f2x=f=>padL+plotW*(Math.log10(Math.max(20,f))-l0)/3, g2y=g=>padT+plotH*(18-g)/36;
+    const px=e.clientX-rect.left, py=e.clientY-rect.top;
+    let hit=-1,best=15; for(let i=0;i<this.eqBands.length;i++){ const b=this.eqBands[i]; const dx=px-f2x(b.freqHz),dy=py-g2y(b.gainDb); const d=Math.hypot(dx,dy); if(d<best){best=d;hit=i;} }
+    if(hit<0){ const now=performance.now(); if(this._lastEqClick&&now-this._lastEqClick<350){ this._lastEqClick=0; this._eqAdd(x2f(px),y2g(py)); } else this._lastEqClick=now; return; }
+    e.preventDefault(); this.eqSel=hit; this.setState({}); const b=this.eqBands[hit]; cv.setPointerCapture(e.pointerId);
+    const move=ev=>{ const mx=ev.clientX-rect.left,my=ev.clientY-rect.top; b.freqHz=Math.max(16,Math.min(21000,x2f(mx))); b.gainDb=Math.max(-18,Math.min(18,y2g(my))); this.setState({}); };
+    const up=ev=>{ const my=ev.clientY-rect.top; if(my>rect.height+22&&this.eqBands.length>1){ this.eqBands.splice(hit,1); this.eqSel=Math.max(0,Math.min(this.eqSel,this.eqBands.length-1)); } this.setState({}); cv.removeEventListener('pointermove',move); cv.removeEventListener('pointerup',up); cv.removeEventListener('lostpointercapture',up); };
+    cv.addEventListener('pointermove',move); cv.addEventListener('pointerup',up); cv.addEventListener('lostpointercapture',up);
+  }
+  eqWheel(e){ if(this.state.scopeMode!=='analyzer')return; const b=this.eqBands[this.eqSel]; if(!b)return; e.preventDefault(); b.q=Math.max(0.3,Math.min(30,b.q*Math.pow(1.0015,-e.deltaY))); this.setState({}); }
+  eqChipDown(e,tgt,key,min,max,step){ e.preventDefault(); const el=e.currentTarget; el.setPointerCapture(e.pointerId); const sy=e.clientY; const obj=tgt==='band'?this.eqBands[this.eqSel]:(tgt==='dyn'?(this.eqBands[this.eqSel]||{}).dyn:this.P); if(!obj)return; const sv=obj[key];
+    const move=ev=>{ let nv=sv+(sy-ev.clientY)/150*(max-min); nv=Math.max(min,Math.min(max,nv)); if(step>=1)nv=Math.round(nv/step)*step; obj[key]=nv; this.setState({}); };
+    const up=()=>{ el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); };
+    el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up); }
+  eqCycleType(){ const b=this.eqBands[this.eqSel]; if(!b)return; const i=this.EQ_TYPES.indexOf(b.type); b.type=this.EQ_TYPES[(i+1)%this.EQ_TYPES.length]; this.setState({}); }
+  eqToggleBandOn(){ const b=this.eqBands[this.eqSel]; if(b){ b.on=!b.on; this.setState({}); } }
+  eqToggleDyn(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ b.dyn.on=!b.dyn.on; this.setState({}); } }
   switchBank(){ const keys=this.bankMeta.map(b=>b[0]); const cur=keys.indexOf(this.curBankKey); this.curBankKey=keys[(cur+1)%keys.length]; this.presetIdx=-1; this.setState({}); }
   importBank(doc){ if(!doc||!Array.isArray(doc.presets))return false; this.banks.custom=doc.presets; this.curBankKey='custom'; this.presetIdx=-1; this.setState({}); return true; } // imports go to their own CUSTOM slot; built-ins preserved
   async _tryFetchBanks(){ const grab=async(file,key)=>{ if(this.banks[key]&&this.banks[key].length)return; try{ const r=await fetch(file); if(!r||!r.ok)return; const d=await r.json(); if(d&&Array.isArray(d.presets))this.banks[key]=d.presets; }catch(e){} }; await grab('./presets.json','factory'); await grab('./presets_further_research.json','research'); this.setState({}); }
@@ -755,6 +869,24 @@ class Component extends DCLogic {
     const presetBtn={padding:'5px 10px',borderRadius:'4px',cursor:'pointer',font:"600 8px 'IBM Plex Mono',monospace",letterSpacing:'.1em',color:'#3b382f',background:'linear-gradient(180deg,#efe9d8,#cfc9b6)',border:'1px solid #8f8a77',boxShadow:'0 2px 3px rgba(0,0,0,.3)',userSelect:'none'};
     const navBtn=Object.assign({},presetBtn,{padding:'5px 9px'});
     const tagBtn=Object.assign({},presetBtn,{background:'#17160f',color:'#ffb454',boxShadow:'inset 0 1px 3px #000'});
+    // --- EQ control panel view-model (shown in analyzer mode) ---
+    const eqAnalyzerOn=s.scopeMode==='analyzer';
+    const eqSelBand=this.eqBands[this.eqSel]||null;
+    const eqTabCol=['#e0603a','#c8c23a','#3ac8c8','#3aa0e0','#8a6ae0','#e03a9a','#e08a3a','#6ae08a','#d0d0d0','#e0c060','#60c0e0','#c060e0'];
+    const eqTabs=this.eqBands.map((b,i)=>({ label:''+(i+1), pick:()=>{ this.eqSel=i; this.setState({}); },
+      style:{width:'26px',height:'26px',borderRadius:'50%',display:'grid',placeItems:'center',cursor:'pointer',font:"700 9px 'IBM Plex Mono',monospace",color:'#111',border:i===this.eqSel?'2px solid #fff':'1px solid #8f8a77',background:b.on?eqTabCol[i%eqTabCol.length]:'#6a6658',opacity:b.on?1:0.55} }));
+    const _chip=(label,val,tgt,key,min,max,step)=>({label,val,down:e=>this.eqChipDown(e,tgt,key,min,max,step)});
+    let eqChips=[],eqDynChips=[];
+    if(eqSelBand){
+      eqChips=[ {label:'FREQ',val:Math.round(eqSelBand.freqHz)+'',down:null}, _chip('GAIN',eqSelBand.gainDb.toFixed(1),'band','gainDb',-18,18,0.1), _chip('Q',eqSelBand.q.toFixed(2),'band','q',0.3,30,0.01) ];
+      eqDynChips=[ _chip('RANGE',eqSelBand.dyn.rangeDb.toFixed(1),'dyn','rangeDb',-18,18,0.1), _chip('THRESH',eqSelBand.dyn.threshDb.toFixed(0),'dyn','threshDb',-60,0,0.5), _chip('RATIO',eqSelBand.dyn.ratio.toFixed(1),'dyn','ratio',1,20,0.1), _chip('ATK',eqSelBand.dyn.attackMs.toFixed(0),'dyn','attackMs',0.5,500,0.5), _chip('REL',eqSelBand.dyn.releaseMs.toFixed(0),'dyn','releaseMs',5,5000,5) ];
+    }
+    const eqGlobChips=[ _chip('MIX',(P.eqMix*100).toFixed(0)+'%','P','eqMix',0,1,0.001), _chip('OUT',P.eqOut.toFixed(1),'P','eqOut',-24,24,0.1) ];
+    const eqChipStyle={display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'ns-resize',userSelect:'none',touchAction:'none',minWidth:'52px',padding:'3px 6px',borderRadius:'4px',background:'rgba(0,0,0,.13)'};
+    const eqChipLabelStyle={font:"600 6.5px 'IBM Plex Mono',monospace",letterSpacing:'.08em',color:'#4a463a'};
+    const eqChipValStyle={font:"600 9px 'IBM Plex Mono',monospace",color:'#ffb454',background:'#17160f',padding:'2px 5px',borderRadius:'2px',minWidth:'38px',textAlign:'center'};
+    const eqBtnStyle=Object.assign({},presetBtn,{padding:'5px 8px'});
+    const eqDynBtnStyle=Object.assign({},presetBtn,{padding:'5px 8px',color:(eqSelBand&&eqSelBand.dyn&&eqSelBand.dyn.on)?'#2a2013':'#3b382f',background:(eqSelBand&&eqSelBand.dyn&&eqSelBand.dyn.on)?'linear-gradient(180deg,#cfae7a,#b98f4a)':'linear-gradient(180deg,#efe9d8,#cfc9b6)'});
     return {
       ui:!s.perf, warm:s.warm,
       undo:()=>this.undo(), redo:()=>this.redo(),
@@ -779,6 +911,11 @@ class Component extends DCLogic {
       statusText:this.running?('RUNNING · '+(this.ctx.sampleRate/1000).toFixed(1)+' kHz · '+nact+' VOICE'+(nact===1?'':'S')):'STANDBY — FLIP POWER OR PLAY A KEY',
       voiceDots, banks:banks3, keys,
       scopeMode:s.scopeMode, scopeModeToggle:()=>this.setState({scopeMode:s.scopeMode==='analyzer'?'scope':'analyzer'}), scopeModeLabel:s.scopeMode==='analyzer'?'◉ ANALYZER':'◎ SCOPE',
+      eqDown:e=>this.eqDown(e), eqWheel:e=>this.eqWheel(e),
+      eqAnalyzerOn, eqTabs, eqAddBand:()=>this._eqAdd(1000,0), eqBtnStyle, eqDynBtnStyle,
+      eqTypeCycle:()=>this.eqCycleType(), eqTypeLabel:eqSelBand?eqSelBand.type.toUpperCase():'—',
+      eqBandOnToggle:()=>this.eqToggleBandOn(), eqBandOnLabel:eqSelBand?(eqSelBand.on?'ON':'OFF'):'—',
+      eqDynToggle:()=>this.eqToggleDyn(), eqChips, eqDynChips, eqGlobChips, eqChipStyle, eqChipLabelStyle, eqChipValStyle,
       texPanelLabel:texBank.label, texParams:texBank.params, texTabLabel:texOtherLabel, texTabToggle:()=>this.setState({texTab:texOther}),
       presetOpen:s.presetOpen, presetToggle:()=>this.setState({presetOpen:!s.presetOpen}), presetClose:()=>this.setState({presetOpen:false}), presetMenu,
       fmSyncOn:P.fmSync, fmSyncToggle:()=>this.toggleSync(),
