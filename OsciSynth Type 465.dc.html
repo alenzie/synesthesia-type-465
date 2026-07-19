@@ -184,7 +184,7 @@ class Component extends DCLogic {
     this.P = { master:0.5 };
     this.CTLS.forEach(c=>this.P[c[1]]=c[6]);
     // --- Phase 0: parameter history (75-step, gesture-coalesced undo/redo) ---
-    this.undoStack=[]; this.redoStack=[]; this.UNDO_MAX=75;
+    this.undoStack=[]; this.redoStack=[]; this.UNDO_MAX=75; this._mutTok=0;
     // --- Phase 0: preset banks (user in localStorage; factory/research fetched or imported) ---
     this.banks={user:[],factory:[],research:[]};
     this.bankMeta=[['user','USER'],['factory','FACTORY'],['research','FURTHER-RES']];
@@ -444,7 +444,7 @@ class Component extends DCLogic {
   _pmeta(id){ if(id==='master')return {min:0,max:1,step:0.001}; const c=this.CTLS.find(x=>x[1]===id); return c?{min:c[3],max:c[4],step:c[5]}:null; }
   _paramIds(){ return this.CTLS.map(c=>c[1]).concat('master'); }
   snapshot(){ const p={}; this._paramIds().forEach(id=>{ p[id]=this.P[id]; }); return {params:p, gen:this.state.gen}; }
-  applySnapshot(s){ if(!s)return; if(s.params)this._paramIds().forEach(id=>{ if(s.params[id]!==undefined)this.P[id]=s.params[id]; }); this.setState(s.gen?{gen:s.gen}:{}); }
+  applySnapshot(s){ if(!s)return; this._mutTok++; if(s.params)this._paramIds().forEach(id=>{ if(s.params[id]!==undefined)this.P[id]=s.params[id]; }); this.setState(s.gen?{gen:s.gen}:{}); }
   pushUndo(before){ this.undoStack.push(before); if(this.undoStack.length>this.UNDO_MAX)this.undoStack.shift(); this.redoStack.length=0; }
   pushUndoIfChanged(before){ if(!before)return; if(JSON.stringify(before)===JSON.stringify(this.snapshot()))return; this.pushUndo(before); this.setState({}); }
   undo(){ if(!this.undoStack.length)return; this.redoStack.push(this.snapshot()); this.applySnapshot(this.undoStack.pop()); }
@@ -455,6 +455,7 @@ class Component extends DCLogic {
   _curBank(){ return this.banks[this.curBankKey]||[]; }
   applyPreset(p,record){
     if(!p)return;
+    this._mutTok++; // cancel any in-flight MUTATE animation
     const before=this.snapshot();
     let gen=this.state.gen;
     if(p.params){
@@ -462,9 +463,15 @@ class Component extends DCLogic {
       if(p.gen&&this.GENS.some(g=>g[0]===p.gen))gen=p.gen;
       this._loadedEq=p.eq||null;
     } else if(p.synth){
-      const sy=p.synth;
+      const sy=p.synth, defs=this._defaultParams();
       if(sy.generator&&this.GENS.some(g=>g[0]===sy.generator))gen=sy.generator;
-      this._paramIds().forEach(id=>{ if(sy[id]!==undefined)this.P[id]=this._clampParam(id,sy[id]); });
+      // A combined-patch is a FULL patch: default-fill any sound param it omits so recall is
+      // deterministic (was: omitted params kept the previous patch's value). master (output level)
+      // is only recalled when the preset explicitly sets it, to avoid surprise volume jumps.
+      this._paramIds().forEach(id=>{
+        if(id==='master'){ if(sy.master!==undefined)this.P.master=this._clampParam('master',sy.master); }
+        else this.P[id]=this._clampParam(id, sy[id]!==undefined?sy[id]:defs[id]);
+      });
       this._loadedEq=p.eq||null;
     } else { this._loadedEq=p.eq||null; }
     const after={params:{},gen:gen}; this._paramIds().forEach(id=>{ after.params[id]=this.P[id]; });
@@ -481,6 +488,7 @@ class Component extends DCLogic {
   async _tryFetchBanks(){ const grab=async(file,key)=>{ try{ const r=await fetch(file); if(!r||!r.ok)return; const d=await r.json(); if(d&&Array.isArray(d.presets))this.banks[key]=d.presets; }catch(e){} }; await grab('./presets.json','factory'); await grab('./presets_further_research.json','research'); this.setState({}); }
   dialDown(e,def){
     e.preventDefault();
+    this._mutTok++; // a manual knob edit cancels any in-flight MUTATE animation
     const [,id,,min,max,step]=def;
     const el=e.currentTarget; el.setPointerCapture(e.pointerId);
     const sy=e.clientY, sv=this.P[id];
@@ -505,8 +513,10 @@ class Component extends DCLogic {
     };
     const before=this.snapshot();
     const from={}; for(const k in target)from[k]=this.P[k];
+    const tok=++this._mutTok;
     const t0=performance.now();
     const anim=now=>{
+      if(tok!==this._mutTok)return; // superseded by a newer MUTATE or a manual edit
       const u=Math.min(1,(now-t0)/600), e=1-Math.pow(1-u,3);
       for(const k in target)this.P[k]=from[k]+(target[k]-from[k])*e;
       this.setState({});
