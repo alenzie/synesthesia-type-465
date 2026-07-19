@@ -274,6 +274,7 @@ class Component extends DCLogic {
     this.P.eqMix=1; this.P.eqOut=0;
     this.EQ_TYPES=['bell','low-shelf','high-shelf','low-cut','high-cut','notch','band-pass','tilt'];
     this.eqBands=this._eqDefaultBands(); this.eqSel=0;
+    this.MODES=[['scope','SCOPE'],['wave','WAVE'],['mod','MOD'],['spectro','SPECTRO'],['analyzer','ANALYZER']];
     // --- Phase 0: parameter history (75-step, gesture-coalesced undo/redo) ---
     this.undoStack=[]; this.redoStack=[]; this.UNDO_MAX=75; this._mutTok=0;
     // --- Phase 0: preset banks (user in localStorage; factory/research fetched or imported) ---
@@ -486,6 +487,56 @@ class Component extends DCLogic {
     const w=Math.round(r.width*this.DPR),h=Math.round(r.height*this.DPR);
     if(w&&h&&(cv.width!==w||cv.height!==h)){ cv.width=w;cv.height=h; }
   }
+  _drawWave(bctx,W,H,DPR){
+    bctx.globalCompositeOperation='source-over'; bctx.fillStyle='#050b06'; bctx.fillRect(0,0,W,H);
+    const N=Math.min(2048,this.RING-2), start=(this.rw-N)&this.RM;
+    const lanes=[[this.ringX,'CH·1 · X','120,235,165',0.27],[this.ringY,'CH·2 · Y','120,200,255',0.73]];
+    bctx.lineWidth=1.4*DPR; bctx.lineJoin='round'; bctx.lineCap='round';
+    for(let li=0;li<2;li++){ const buf=lanes[li][0], cy=H*lanes[li][3], amp=H*0.2;
+      bctx.strokeStyle='rgba(130,255,170,0.10)'; bctx.beginPath(); bctx.moveTo(0,cy); bctx.lineTo(W,cy); bctx.stroke();
+      bctx.strokeStyle='rgba('+lanes[li][2]+',0.9)'; bctx.beginPath();
+      for(let i=0;i<N;i++){ const idx=(start+i)&this.RM; const x=i/N*W; let y=cy-buf[idx]*amp; if(y<cy-amp)y=cy-amp; if(y>cy+amp)y=cy+amp; if(i===0)bctx.moveTo(x,y); else bctx.lineTo(x,y); }
+      bctx.stroke();
+      bctx.fillStyle='rgba('+lanes[li][2]+',0.7)'; bctx.font="600 "+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.textAlign='left'; bctx.fillText(lanes[li][1],10*DPR,cy-amp-5*DPR);
+    }
+    bctx.fillStyle='rgba(150,255,190,0.5)'; bctx.textAlign='right'; bctx.font="600 "+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.fillText('WAVEFORM · time-domain',W-12*DPR,14*DPR);
+  }
+  _drawMod(bctx,W,H,DPR){
+    bctx.globalCompositeOperation='source-over'; bctx.fillStyle='#060d08'; bctx.fillRect(0,0,W,H);
+    const P=this.P, TAU=this.TAU;
+    const gs=[
+      {l:'FM LFO',ph:this.fmPh*TAU,amt:P.fmDepth/0.5,ex:(P.fmSync?this.FM_DIVS[P.fmDivision|0].l:P.fmRate.toFixed(1)+'Hz')},
+      {l:'ROT X',ph:this.ax||0,amt:Math.min(1,Math.abs(P.rotX))},
+      {l:'ROT Y',ph:this.ay||0,amt:Math.min(1,Math.abs(P.rotY))},
+      {l:'ROT Z',ph:this.az||0,amt:Math.min(1,Math.abs(P.rotZ))},
+      {l:'MORPH',ph:P.morph*TAU,amt:1,ex:P.morph.toFixed(2)},
+    ];
+    const n=gs.length, gw=W/n, r=Math.min(gw,H)*0.24, cyy=H*0.4;
+    for(let i=0;i<n;i++){ const g=gs[i], cx=gw*(i+0.5);
+      bctx.strokeStyle='rgba(130,255,170,0.2)'; bctx.lineWidth=2*DPR; bctx.beginPath(); bctx.arc(cx,cyy,r,0,TAU); bctx.stroke();
+      const dx=cx+Math.cos(g.ph)*r, dy=cyy+Math.sin(g.ph)*r;
+      bctx.strokeStyle='rgba(160,255,190,0.55)'; bctx.lineWidth=1.5*DPR; bctx.beginPath(); bctx.moveTo(cx,cyy); bctx.lineTo(dx,dy); bctx.stroke();
+      bctx.fillStyle='rgba(160,255,190,'+(0.35+0.6*Math.min(1,g.amt||0)).toFixed(2)+')'; bctx.beginPath(); bctx.arc(dx,dy,5*DPR,0,TAU); bctx.fill();
+      bctx.fillStyle='rgba(150,255,190,0.75)'; bctx.font="600 "+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.textAlign='center'; bctx.fillText(g.l,cx,cyy+r+16*DPR);
+      if(g.ex){ bctx.fillStyle='rgba(150,255,190,0.45)'; bctx.font=(7*DPR)+"px 'IBM Plex Mono',monospace"; bctx.fillText(g.ex,cx,cyy+r+27*DPR); }
+    }
+    const by=H-24*DPR, bw=W/this.MAXV;
+    for(let i=0;i<this.MAXV;i++){ const e=this.voices[i]?this.voices[i].env:0, h=e*18*DPR; bctx.fillStyle='hsla(150,80%,60%,'+(0.15+0.7*e).toFixed(2)+')'; bctx.fillRect(bw*i+2,by-h,bw-4,h); }
+    bctx.fillStyle='rgba(150,255,190,0.5)'; bctx.textAlign='left'; bctx.font="600 "+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.fillText('MODULATION MOTION · live cycles',10*DPR,14*DPR);
+    bctx.textAlign='right'; bctx.fillStyle='rgba(150,255,190,0.4)'; bctx.font=(7*DPR)+"px 'IBM Plex Mono',monospace"; bctx.fillText('VOICE ENVELOPES',W-10*DPR,by-22*DPR);
+  }
+  _drawSpectro(bctx,W,H,DPR){
+    if(!this._spCanvas||this._spCanvas.width!==W||this._spCanvas.height!==H){ this._spCanvas=document.createElement('canvas'); this._spCanvas.width=W; this._spCanvas.height=H; this._spCtx=this._spCanvas.getContext('2d'); this._spCtx.fillStyle='#050b06'; this._spCtx.fillRect(0,0,W,H); }
+    const sc=this._spCtx, step=Math.max(1,2*DPR|0);
+    sc.drawImage(this._spCanvas,-step,0); sc.fillStyle='#050b06'; sc.fillRect(W-step,0,step,H);
+    if(this.analyser&&this.running&&this._freqData){
+      this.analyser.getFloatFrequencyData(this._freqData);
+      const bins=this._freqData.length, ny=this.ctx.sampleRate/2, l0=Math.log10(20), dec=3;
+      for(let y=0;y<H;y++){ const f=Math.pow(10,l0+dec*(1-y/H)); let bin=Math.round(f*bins/ny); if(bin<0)bin=0; if(bin>=bins)bin=bins-1; let db=this._freqData[bin]; if(!isFinite(db))db=-120; db+=4.5*Math.log2(Math.max(20,f)/1000); const t=Math.max(0,Math.min(1,(db+90)/96)); sc.fillStyle='hsla('+(210-170*t).toFixed(0)+',90%,'+(6+54*t).toFixed(0)+'%,1)'; sc.fillRect(W-step,y,step,1); }
+    }
+    bctx.globalCompositeOperation='source-over'; bctx.drawImage(this._spCanvas,0,0);
+    bctx.fillStyle='rgba(150,255,190,0.55)'; bctx.textAlign='left'; bctx.font="600 "+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.fillText('SPECTROGRAM · time →  (20Hz–20kHz, log)',10*DPR,14*DPR);
+  }
   _drawAnalyzer(bctx,W,H,DPR){
     bctx.globalCompositeOperation='source-over';
     bctx.fillStyle='#060d08'; bctx.fillRect(0,0,W,H);
@@ -566,7 +617,11 @@ class Component extends DCLogic {
     const wantHue=this.state.hueFollow&&noteCt>0?Math.max(-100,Math.min(140,(noteSum/noteCt-60)*3.2)):0;
     this.hueOffSm+=(wantHue-this.hueOffSm)*0.06;
     if((this._uiCnt=(this._uiCnt||0)+1)>=15){ this._uiCnt=0; this.setState({tick:this.state.tick+1}); }
-    if(this.state.scopeMode==='analyzer'){ this._drawAnalyzer(bctx,W,H,DPR); return; }
+    const _sm=this.state.scopeMode;
+    if(_sm==='analyzer'){ this._drawAnalyzer(bctx,W,H,DPR); return; }
+    if(_sm==='wave'){ this._drawWave(bctx,W,H,DPR); return; }
+    if(_sm==='mod'){ this._drawMod(bctx,W,H,DPR); return; }
+    if(_sm==='spectro'){ this._drawSpectro(bctx,W,H,DPR); return; }
     bctx.globalCompositeOperation='source-over';
     bctx.fillStyle='rgba(4,9,5,'+(1-P.persist).toFixed(3)+')';
     bctx.fillRect(0,0,W,H);
@@ -932,7 +987,9 @@ class Component extends DCLogic {
       glass:this.props.glassReflection??true,
       statusText:this.running?('RUNNING · '+(this.ctx.sampleRate/1000).toFixed(1)+' kHz · '+nact+' VOICE'+(nact===1?'':'S')):'STANDBY — FLIP POWER OR PLAY A KEY',
       voiceDots, banks:banks3, keys,
-      scopeMode:s.scopeMode, scopeScope:s.scopeMode!=='analyzer', scopeModeToggle:()=>this.setState({scopeMode:s.scopeMode==='analyzer'?'scope':'analyzer'}), scopeModeLabel:s.scopeMode==='analyzer'?'◉ ANALYZER':'◎ SCOPE',
+      scopeMode:s.scopeMode, scopeScope:s.scopeMode==='scope',
+      scopeModeToggle:()=>{ const i=this.MODES.findIndex(m=>m[0]===s.scopeMode); this.setState({scopeMode:this.MODES[(i+1)%this.MODES.length][0]}); },
+      scopeModeLabel:'◉ '+((this.MODES.find(m=>m[0]===s.scopeMode)||['','SCOPE'])[1]),
       eqDown:e=>this.eqDown(e), eqWheel:e=>this.eqWheel(e),
       eqAnalyzerOn, eqTabs, eqAddBand:()=>this._eqAdd(1000,0), eqBtnStyle, eqDynBtnStyle,
       eqTypeCycle:()=>this.eqCycleType(), eqTypeLabel:eqSelBand?eqSelBand.type.toUpperCase():'—',
