@@ -39,6 +39,24 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
     </div>
   </div>
 
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <div onClick="{{undo}}" title="Undo (Ctrl+Z)" style="{{undoBtnStyle}}">↩ UNDO</div>
+    <div onClick="{{redo}}" title="Redo (Ctrl+Shift+Z)" style="{{redoBtnStyle}}">REDO ↪</div>
+    <div style="font:500 7.5px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#8a8574">{{histInfo}}</div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+    <div style="font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#4a463a">PRESET</div>
+    <div onClick="{{bankCycle}}" title="Cycle preset bank" style="{{tagBtnStyle}}">{{bankLabel}}</div>
+    <div onClick="{{presetPrev}}" title="Previous preset" style="{{navBtnStyle}}">◀</div>
+    <div style="{{presetNameStyle}}">{{presetName}}</div>
+    <div onClick="{{presetNext}}" title="Next preset" style="{{navBtnStyle}}">▶</div>
+    <div onClick="{{presetSave}}" title="Save current settings as a user preset" style="{{presetBtnStyle}}">SAVE</div>
+    <div onClick="{{presetImportClick}}" title="Import a preset bank .json" style="{{presetBtnStyle}}">IMPORT</div>
+    <div onClick="{{presetReset}}" title="Reset all parameters to defaults" style="{{presetBtnStyle}}">RESET</div>
+    <input type="file" ref="{{presetFileRef}}" accept="application/json,.json" style="display:none" onChange="{{presetImport}}">
+  </div>
+
   <div style="display:flex;gap:16px;align-items:stretch;flex-wrap:wrap">
     <div style="flex:1;min-width:340px;background:linear-gradient(180deg,#2b2a24,#201f1a);border-radius:10px;padding:14px;box-shadow:inset 0 1px 2px rgba(255,255,255,.08),0 2px 6px rgba(0,0,0,.35);position:relative">
       <div style="position:absolute;top:5px;left:5px;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#96917f,#45412f);box-shadow:inset 0 0 2px #000"><div style="position:absolute;left:1px;right:1px;top:3.5px;height:1.5px;background:#1c1a12;transform:rotate(35deg)"></div></div>
@@ -165,6 +183,13 @@ class Component extends DCLogic {
     ];
     this.P = { master:0.5 };
     this.CTLS.forEach(c=>this.P[c[1]]=c[6]);
+    // --- Phase 0: parameter history (75-step, gesture-coalesced undo/redo) ---
+    this.undoStack=[]; this.redoStack=[]; this.UNDO_MAX=75;
+    // --- Phase 0: preset banks (user in localStorage; factory/research fetched or imported) ---
+    this.banks={user:[],factory:[],research:[]};
+    this.bankMeta=[['user','USER'],['factory','FACTORY'],['research','FURTHER-RES']];
+    this.curBankKey='user'; this.presetIdx=-1; this._loadedEq=null; this._loadedName=''; this._loadedSnap=null;
+    try{ const u=JSON.parse(localStorage.getItem('synesthesia_presets_v1')||'[]'); if(Array.isArray(u))this.banks.user=u; }catch(e){}
     this.GENS = [
       ['lissajous','LISSAJOUS','Lissajous Matrix — X/Y/Z harmonics = per-axis ratios · chords weave interference webs'],
       ['hyperstar','HYPER STAR','Hyper Star — X harmonic = star points · Y = z-wobble · Morph = spike depth'],
@@ -193,7 +218,7 @@ class Component extends DCLogic {
       ['radial-gradient(circle at 40% 35%,#ffc4b2,#e03a20)','0 0 6px rgba(235,85,55,.8)'],
     ];
     this._refs={};
-    ['beamRef','fpsRef','needleRef','fileRef','seekThumbRef','timeRef','dotsRef'].forEach(n=>{ this[n]=el=>{this._refs[n]=el; if(n==='beamRef'&&el)this.sizeBeam();}; });
+    ['beamRef','fpsRef','needleRef','fileRef','seekThumbRef','timeRef','dotsRef','presetFileRef'].forEach(n=>{ this[n]=el=>{this._refs[n]=el; if(n==='beamRef'&&el)this.sizeBeam();}; });
   }
   mtof(n){return 440*Math.pow(2,(n-69)/12);}
   meterDot(i,lv){ const on=lv*10>=i+0.5, c=this.DOTCOLS[i<5?0:i<8?1:2]; return {bg:on?c[0]:'#8f8a77', sh:on?c[1]:'inset 0 1px 1px rgba(0,0,0,.3)'}; }
@@ -415,18 +440,58 @@ class Component extends DCLogic {
     g.addColorStop(0,'hsla('+hue+',100%,90%,.9)');g.addColorStop(1,'hsla('+hue+',100%,60%,0)');
     bctx.fillStyle=g;bctx.beginPath();bctx.arc(hx,hy,7*DPR,0,TAU);bctx.fill();
   }
+  // --- Phase 0: parameter model + history ------------------------------------
+  _pmeta(id){ if(id==='master')return {min:0,max:1,step:0.001}; const c=this.CTLS.find(x=>x[1]===id); return c?{min:c[3],max:c[4],step:c[5]}:null; }
+  _paramIds(){ return this.CTLS.map(c=>c[1]).concat('master'); }
+  snapshot(){ const p={}; this._paramIds().forEach(id=>{ p[id]=this.P[id]; }); return {params:p, gen:this.state.gen}; }
+  applySnapshot(s){ if(!s)return; if(s.params)this._paramIds().forEach(id=>{ if(s.params[id]!==undefined)this.P[id]=s.params[id]; }); this.setState(s.gen?{gen:s.gen}:{}); }
+  pushUndo(before){ this.undoStack.push(before); if(this.undoStack.length>this.UNDO_MAX)this.undoStack.shift(); this.redoStack.length=0; }
+  pushUndoIfChanged(before){ if(!before)return; if(JSON.stringify(before)===JSON.stringify(this.snapshot()))return; this.pushUndo(before); this.setState({}); }
+  undo(){ if(!this.undoStack.length)return; this.redoStack.push(this.snapshot()); this.applySnapshot(this.undoStack.pop()); }
+  redo(){ if(!this.redoStack.length)return; this.undoStack.push(this.snapshot()); this.applySnapshot(this.redoStack.pop()); }
+  // --- Phase 0: presets -----------------------------------------------------
+  _clampParam(id,v){ const m=this._pmeta(id); if(!m||typeof v!=='number'||!isFinite(v))return this.P[id]; v=Math.max(m.min,Math.min(m.max,v)); if(m.step>=1)v=Math.round(v/m.step)*m.step; return v; }
+  _defaultParams(){ const p={master:0.5}; this.CTLS.forEach(c=>{ p[c[1]]=c[6]; }); return p; }
+  _curBank(){ return this.banks[this.curBankKey]||[]; }
+  applyPreset(p,record){
+    if(!p)return;
+    const before=this.snapshot();
+    let gen=this.state.gen;
+    if(p.params){
+      this._paramIds().forEach(id=>{ if(p.params[id]!==undefined)this.P[id]=this._clampParam(id,p.params[id]); });
+      if(p.gen&&this.GENS.some(g=>g[0]===p.gen))gen=p.gen;
+      this._loadedEq=p.eq||null;
+    } else if(p.synth){
+      const sy=p.synth;
+      if(sy.generator&&this.GENS.some(g=>g[0]===sy.generator))gen=sy.generator;
+      this._paramIds().forEach(id=>{ if(sy[id]!==undefined)this.P[id]=this._clampParam(id,sy[id]); });
+      this._loadedEq=p.eq||null;
+    } else { this._loadedEq=p.eq||null; }
+    const after={params:{},gen:gen}; this._paramIds().forEach(id=>{ after.params[id]=this.P[id]; });
+    if(record!==false && JSON.stringify(before)!==JSON.stringify(after))this.pushUndo(before);
+    this.setState({gen});
+    this._loadedName=p.name||''; this._loadedSnap=after;
+  }
+  resetToDefault(){ this.applyPreset({name:'Init', params:this._defaultParams(), gen:this.GENS[0][0]}); }
+  savePreset(name){ const snap=this.snapshot(); const preset={name:name,v:1,gen:snap.gen,params:snap.params}; this.banks.user.push(preset); this.curBankKey='user'; this.presetIdx=this.banks.user.length-1; this._loadedName=name; this._loadedSnap=snap; this._persistUser(); this.setState({}); }
+  _persistUser(){ try{ localStorage.setItem('synesthesia_presets_v1', JSON.stringify(this.banks.user)); }catch(e){} }
+  navPreset(dir){ const bank=this._curBank(); if(!bank.length)return; let i=this.presetIdx; i=(i<0?(dir>0?0:bank.length-1):i+dir); i=((i%bank.length)+bank.length)%bank.length; this.presetIdx=i; this.applyPreset(bank[i]); }
+  switchBank(){ const keys=this.bankMeta.map(b=>b[0]); const cur=keys.indexOf(this.curBankKey); this.curBankKey=keys[(cur+1)%keys.length]; this.presetIdx=-1; this.setState({}); }
+  importBank(doc){ if(!doc||!Array.isArray(doc.presets))return false; const key=(doc.bank==='further-research')?'research':'factory'; this.banks[key]=doc.presets; this.curBankKey=key; this.presetIdx=-1; this.setState({}); return true; }
+  async _tryFetchBanks(){ const grab=async(file,key)=>{ try{ const r=await fetch(file); if(!r||!r.ok)return; const d=await r.json(); if(d&&Array.isArray(d.presets))this.banks[key]=d.presets; }catch(e){} }; await grab('./presets.json','factory'); await grab('./presets_further_research.json','research'); this.setState({}); }
   dialDown(e,def){
     e.preventDefault();
     const [,id,,min,max,step]=def;
     const el=e.currentTarget; el.setPointerCapture(e.pointerId);
     const sy=e.clientY, sv=this.P[id];
+    const before=this.snapshot();
     const move=ev=>{
       let nv=sv+(sy-ev.clientY)/160*(max-min);
       nv=Math.max(min,Math.min(max,nv));
       if(step>=1)nv=Math.round(nv/step)*step;
       this.P[id]=nv; this.setState({});
     };
-    const up=()=>{el.removeEventListener('pointermove',move);el.removeEventListener('pointerup',up);el.removeEventListener('lostpointercapture',up);};
+    const up=()=>{this.pushUndoIfChanged(before);el.removeEventListener('pointermove',move);el.removeEventListener('pointerup',up);el.removeEventListener('lostpointercapture',up);};
     el.addEventListener('pointermove',move);el.addEventListener('pointerup',up);el.addEventListener('lostpointercapture',up);
   }
   mutate(){
@@ -438,13 +503,14 @@ class Component extends DCLogic {
       drive:Math.random()<0.6?0:rnd(0.1,0.7),smooth:rnd(0.05,0.5),
       hue:rnd(0,360),persist:rnd(0.35,0.9),
     };
+    const before=this.snapshot();
     const from={}; for(const k in target)from[k]=this.P[k];
     const t0=performance.now();
     const anim=now=>{
       const u=Math.min(1,(now-t0)/600), e=1-Math.pow(1-u,3);
       for(const k in target)this.P[k]=from[k]+(target[k]-from[k])*e;
       this.setState({});
-      if(u<1)requestAnimationFrame(anim);
+      if(u<1)requestAnimationFrame(anim); else this.pushUndoIfChanged(before);
     };
     requestAnimationFrame(anim);
   }
@@ -467,6 +533,8 @@ class Component extends DCLogic {
       const tag=(e.target.tagName||'').toLowerCase();
       if(tag==='input'||tag==='textarea'||tag==='select')return;
       if(e.code==='Escape'&&this.state.perf){this.setState({perf:false});return;}
+      if((e.ctrlKey||e.metaKey)&&e.code==='KeyZ'){e.preventDefault();if(e.shiftKey)this.redo();else this.undo();return;}
+      if((e.ctrlKey||e.metaKey)&&e.code==='KeyY'){e.preventDefault();this.redo();return;}
       if(e.code==='KeyZ'){this.shiftOct(-12);return;}
       if(e.code==='KeyX'){this.shiftOct(12);return;}
       if(this.KMAP[e.code]===undefined)return;
@@ -480,6 +548,7 @@ class Component extends DCLogic {
     window.addEventListener('keyup',this._ku);
     window.addEventListener('pointerup',this._pu);
     window.addEventListener('pointercancel',this._pu);
+    this._tryFetchBanks();
   }
   componentWillUnmount(){
     cancelAnimationFrame(this._raf);
@@ -545,8 +614,34 @@ class Component extends DCLogic {
       boxShadow:active?'inset 0 2px 4px rgba(0,0,0,.3), 0 0 0 1px rgba(138,90,30,.3)':'0 2px 3px rgba(0,0,0,.3)',
       opacity:dis?.4:1,
     });
+    const histBtn=on=>({
+      padding:'6px 12px',borderRadius:'5px',cursor:on?'pointer':'default',font:"600 8.5px 'IBM Plex Mono',monospace",letterSpacing:'.12em',color:'#3b382f',
+      background:'linear-gradient(180deg,#efe9d8,#cfc9b6)',border:'1px solid #8f8a77',boxShadow:'0 2px 3px rgba(0,0,0,.3)',opacity:on?1:.4,userSelect:'none',
+    });
+    // preset browser view-model
+    const _bankArr=this._curBank();
+    const _bankLbl=(this.bankMeta.find(b=>b[0]===this.curBankKey)||['','?'])[1];
+    const _cur=(this.presetIdx>=0&&_bankArr[this.presetIdx])?_bankArr[this.presetIdx]:null;
+    const _dirty=this._loadedSnap&&JSON.stringify(this._loadedSnap)!==JSON.stringify(this.snapshot());
+    const _pname=_cur?(_cur.name+' ('+(this.presetIdx+1)+'/'+_bankArr.length+')'):(_bankArr.length?('— '+_bankArr.length+' presets —'):'— empty —');
+    const presetBtn={padding:'5px 10px',borderRadius:'4px',cursor:'pointer',font:"600 8px 'IBM Plex Mono',monospace",letterSpacing:'.1em',color:'#3b382f',background:'linear-gradient(180deg,#efe9d8,#cfc9b6)',border:'1px solid #8f8a77',boxShadow:'0 2px 3px rgba(0,0,0,.3)',userSelect:'none'};
+    const navBtn=Object.assign({},presetBtn,{padding:'5px 9px'});
+    const tagBtn=Object.assign({},presetBtn,{background:'#17160f',color:'#ffb454',boxShadow:'inset 0 1px 3px #000'});
     return {
       ui:!s.perf, warm:s.warm,
+      undo:()=>this.undo(), redo:()=>this.redo(),
+      undoBtnStyle:histBtn(this.undoStack.length>0), redoBtnStyle:histBtn(this.redoStack.length>0),
+      histInfo:this.undoStack.length+' / '+this.UNDO_MAX+' UNDO'+(this.redoStack.length?(' · '+this.redoStack.length+' REDO'):''),
+      presetFileRef:this.presetFileRef,
+      bankLabel:_bankLbl, tagBtnStyle:tagBtn, navBtnStyle:navBtn, presetBtnStyle:presetBtn,
+      presetName:(_dirty?'*':'')+_pname,
+      presetNameStyle:{minWidth:'150px',maxWidth:'240px',textAlign:'center',padding:'5px 10px',borderRadius:'4px',font:"500 8px 'IBM Plex Mono',monospace",color:'#ffb454',background:'#17160f',boxShadow:'inset 0 1px 3px #000',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'},
+      bankCycle:()=>this.switchBank(),
+      presetPrev:()=>this.navPreset(-1), presetNext:()=>this.navPreset(1),
+      presetSave:()=>{ const nm=prompt('Save preset as:', this._loadedName||'My Patch'); if(nm&&nm.trim())this.savePreset(nm.trim()); },
+      presetReset:()=>this.resetToDefault(),
+      presetImportClick:()=>{ if(this._refs.presetFileRef)this._refs.presetFileRef.click(); },
+      presetImport:async e=>{ const f=e.target.files&&e.target.files[0]; if(!f)return; try{ const doc=JSON.parse(await f.text()); if(!this.importBank(doc))alert('Not a preset bank (expected a {"presets":[...]} JSON).'); }catch(err){ alert('Could not read preset file: '+err.message); } e.target.value=''; },
       scan:this.props.scanlines??true,
       glass:this.props.glassReflection??true,
       statusText:this.running?('RUNNING · '+(this.ctx.sampleRate/1000).toFixed(1)+' kHz · '+nact+' VOICE'+(nact===1?'':'S')):'STANDBY — FLIP POWER OR PLAY A KEY',
@@ -554,16 +649,16 @@ class Component extends DCLogic {
       genHint:g[2],
       selName:g[1],
       selPtr:ptrStyle(genIdx/(this.GENS.length-1),6,16,25),
-      selNext:()=>this.setState({gen:this.GENS[(genIdx+1)%this.GENS.length][0]}),
+      selNext:()=>{ const ng=this.GENS[(genIdx+1)%this.GENS.length][0]; if(ng!==s.gen)this.pushUndo(this.snapshot()); this.setState({gen:ng}); },
       selDown:e=>{
         e.preventDefault();
         const el=e.currentTarget; el.setPointerCapture(e.pointerId);
-        const sy=e.clientY, si=genIdx;
+        const sy=e.clientY, si=genIdx; const before=this.snapshot();
         const move=ev=>{
           const ni=Math.max(0,Math.min(this.GENS.length-1,si+Math.round((sy-ev.clientY)/24)));
           if(this.GENS[ni][0]!==this.state.gen)this.setState({gen:this.GENS[ni][0]});
         };
-        const up=()=>{el.removeEventListener('pointermove',move);el.removeEventListener('pointerup',up);el.removeEventListener('lostpointercapture',up);};
+        const up=()=>{this.pushUndoIfChanged(before);el.removeEventListener('pointermove',move);el.removeEventListener('pointerup',up);el.removeEventListener('lostpointercapture',up);};
         el.addEventListener('pointermove',move);el.addEventListener('pointerup',up);el.addEventListener('lostpointercapture',up);
       },
       masterVal:(P.master*100).toFixed(0)+'%',
