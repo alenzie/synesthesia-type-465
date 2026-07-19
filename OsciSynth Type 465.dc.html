@@ -103,7 +103,7 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
         <sc-if value="{{glass}}" hint-placeholder-val="{{ true }}">
           <div style="position:absolute;inset:0;pointer-events:none;background:linear-gradient(115deg,rgba(255,255,255,.09) 0%,rgba(255,255,255,.02) 22%,transparent 40%),radial-gradient(115% 95% at 50% 45%,transparent 55%,rgba(0,0,0,.6) 100%)"></div>
         </sc-if>
-        <div style="position:absolute;top:9px;left:12px;font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:rgba(150,255,190,.5);pointer-events:none">CH·1→X &nbsp; CH·2→Y &nbsp; XY</div>
+        <sc-if value="{{scopeScope}}" hint-placeholder-val="{{ true }}"><div style="position:absolute;top:9px;left:12px;font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:rgba(150,255,190,.5);pointer-events:none">CH·1→X &nbsp; CH·2→Y &nbsp; XY</div></sc-if>
         <div onClick="{{scopeModeToggle}}" title="Toggle oscilloscope / spectrum analyzer" style="position:absolute;top:8px;right:12px;z-index:3;font:600 7px 'IBM Plex Mono',monospace;letter-spacing:.1em;color:#062012;background:rgba(150,255,190,.8);border-radius:3px;padding:3px 8px;cursor:pointer">{{scopeModeLabel}}</div>
         <div ref="{{fpsRef}}" style="position:absolute;bottom:8px;right:11px;font:400 7.5px 'IBM Plex Mono',monospace;color:rgba(150,255,190,.35);pointer-events:none"></div>
 
@@ -517,8 +517,14 @@ class Component extends DCLogic {
       const g2y=g=>padT+plotH*(18-g)/36, sr=this.ctx?this.ctx.sampleRate:44100;
       bctx.strokeStyle='rgba(255,255,255,0.13)'; bctx.lineWidth=1; bctx.beginPath(); bctx.moveTo(padL,g2y(0)); bctx.lineTo(padL+plotW,g2y(0)); bctx.stroke();
       const cols=Math.max(2,plotW|0);
+      // coeffs computed from LIVE band params (not the audio-thread _c) so the curve is correct even when
+      // powered off and updates instantly with freq/gain/Q; dynamic bands include their current gain movement
+      const cof=this.eqBands.map(b=> b.on? this._eqCoeffs(b.type,b.freqHz,b.gainDb+((b.dyn&&b.dyn.on)?(b._gr||0):0),b.q,sr) : null );
+      const xs=[]; for(let px=0;px<=cols;px++)xs.push(px);
+      for(const b of this.eqBands){ if(b.on){ const cxp=(Math.log10(Math.max(20,Math.min(20000,b.freqHz)))-l0)/dec*cols; if(cxp>=0&&cxp<=cols){ xs.push(cxp-0.5,cxp,cxp+0.5); } } } // sample each apex so high-Q peaks stay pointy
+      xs.sort((a,b)=>a-b);
       bctx.beginPath();
-      for(let px=0;px<=cols;px++){ const f=Math.pow(10,l0+dec*(px/cols)); let sum=this.P.eqOut||0; for(const b of this.eqBands){ if(b.on&&b._c)sum+=this._eqMagDb(b._c,f,sr); } const y=g2y(Math.max(-18,Math.min(18,sum))); if(px===0)bctx.moveTo(padL,y); else bctx.lineTo(padL+px,y); }
+      for(let k=0;k<xs.length;k++){ const px=xs[k]; const f=Math.pow(10,l0+dec*(px/cols)); let sum=this.P.eqOut||0; for(let bi=0;bi<cof.length;bi++){ if(cof[bi])sum+=this._eqMagDb(cof[bi],f,sr); } const y=g2y(Math.max(-18,Math.min(18,sum))); if(k===0)bctx.moveTo(padL+px,y); else bctx.lineTo(padL+px,y); }
       bctx.strokeStyle='rgba(255,206,122,0.95)'; bctx.lineWidth=1.6*DPR; bctx.stroke();
       const COL=['#e0603a','#c8c23a','#3ac8c8','#3aa0e0','#8a6ae0','#e03a9a','#e08a3a','#6ae08a','#d0d0d0','#e0c060','#60c0e0','#c060e0'];
       for(let i=0;i<this.eqBands.length;i++){ const b=this.eqBands[i]; const hx=f2x(Math.max(20,Math.min(20000,b.freqHz))), hy=g2y(Math.max(-18,Math.min(18,b.gainDb))), col=COL[i%COL.length], rad=(i===this.eqSel?9:7)*DPR;
@@ -705,7 +711,7 @@ class Component extends DCLogic {
   eqToggleDyn(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ b.dyn.on=!b.dyn.on; this.setState({}); } }
   switchBank(){ const keys=this.bankMeta.map(b=>b[0]); const cur=keys.indexOf(this.curBankKey); this.curBankKey=keys[(cur+1)%keys.length]; this.presetIdx=-1; this.setState({}); }
   importBank(doc){ if(!doc||!Array.isArray(doc.presets))return false; this.banks.custom=doc.presets; this.curBankKey='custom'; this.presetIdx=-1; this.setState({}); return true; } // imports go to their own CUSTOM slot; built-ins preserved
-  async _tryFetchBanks(){ const grab=async(file,key)=>{ if(this.banks[key]&&this.banks[key].length)return; try{ const r=await fetch(file); if(!r||!r.ok)return; const d=await r.json(); if(d&&Array.isArray(d.presets))this.banks[key]=d.presets; }catch(e){} }; await grab('./presets.json','factory'); await grab('./presets_further_research.json','research'); this.setState({}); }
+  async _tryFetchBanks(){ if(typeof location!=='undefined'&&location.protocol==='file:')return; const grab=async(file,key)=>{ if(this.banks[key]&&this.banks[key].length)return; try{ const r=await fetch(file); if(!r||!r.ok)return; const d=await r.json(); if(d&&Array.isArray(d.presets))this.banks[key]=d.presets; }catch(e){} }; await grab('./presets.json','factory'); await grab('./presets_further_research.json','research'); this.setState({}); }
   dialDown(e,def){
     e.preventDefault();
     this._mutTok++; // a manual knob edit cancels any in-flight MUTATE animation
@@ -910,7 +916,7 @@ class Component extends DCLogic {
       glass:this.props.glassReflection??true,
       statusText:this.running?('RUNNING · '+(this.ctx.sampleRate/1000).toFixed(1)+' kHz · '+nact+' VOICE'+(nact===1?'':'S')):'STANDBY — FLIP POWER OR PLAY A KEY',
       voiceDots, banks:banks3, keys,
-      scopeMode:s.scopeMode, scopeModeToggle:()=>this.setState({scopeMode:s.scopeMode==='analyzer'?'scope':'analyzer'}), scopeModeLabel:s.scopeMode==='analyzer'?'◉ ANALYZER':'◎ SCOPE',
+      scopeMode:s.scopeMode, scopeScope:s.scopeMode!=='analyzer', scopeModeToggle:()=>this.setState({scopeMode:s.scopeMode==='analyzer'?'scope':'analyzer'}), scopeModeLabel:s.scopeMode==='analyzer'?'◉ ANALYZER':'◎ SCOPE',
       eqDown:e=>this.eqDown(e), eqWheel:e=>this.eqWheel(e),
       eqAnalyzerOn, eqTabs, eqAddBand:()=>this._eqAdd(1000,0), eqBtnStyle, eqDynBtnStyle,
       eqTypeCycle:()=>this.eqCycleType(), eqTypeLabel:eqSelBand?eqSelBand.type.toUpperCase():'—',
