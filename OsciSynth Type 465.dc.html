@@ -459,7 +459,11 @@ class Component extends DCLogic {
     const before=this.snapshot();
     let gen=this.state.gen;
     if(p.params){
-      this._paramIds().forEach(id=>{ if(p.params[id]!==undefined)this.P[id]=this._clampParam(id,p.params[id]); });
+      const defs=this._defaultParams();
+      this._paramIds().forEach(id=>{
+        if(id==='master'){ if(p.params.master!==undefined)this.P.master=this._clampParam('master',p.params.master); }
+        else this.P[id]=this._clampParam(id, p.params[id]!==undefined?p.params[id]:defs[id]);
+      });
       if(p.gen&&this.GENS.some(g=>g[0]===p.gen))gen=p.gen;
       this._loadedEq=p.eq||null;
     } else if(p.synth){
@@ -516,7 +520,7 @@ class Component extends DCLogic {
     const tok=++this._mutTok;
     const t0=performance.now();
     const anim=now=>{
-      if(tok!==this._mutTok)return; // superseded by a newer MUTATE or a manual edit
+      if(tok!==this._mutTok){ this.pushUndoIfChanged(before); return; } // superseded: still record the pre-MUTATE state as one undo step
       const u=Math.min(1,(now-t0)/600), e=1-Math.pow(1-u,3);
       for(const k in target)this.P[k]=from[k]+(target[k]-from[k])*e;
       this.setState({});
