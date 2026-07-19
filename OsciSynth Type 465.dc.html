@@ -84,12 +84,13 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
     </sc-if>
   </div>
 
-  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-    <div style="font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#4a463a">TEMPO</div>
-    <div onClick="{{fmSyncToggle}}" title="Sync FM RATE to tempo (note divisions) vs free Hz" style="{{syncBtnStyle}}">SYNC</div>
+  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+    <div style="font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#4a463a">TEMPO SYNC</div>
+    <sc-for list="{{syncBtns}}" as="sb" hint-placeholder-count="6"><div onClick="{{sb.toggle}}" title="Sync this motion cycle to the tempo — its knob becomes a note-division selector" style="{{sb.style}}">{{sb.label}}</div></sc-for>
+    <div style="width:1px;height:20px;background:#a49e8c;margin:0 2px"></div>
     <div style="font:600 7.5px 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#4a463a">BPM</div>
     <input type="number" min="20" max="300" step="1" value="{{bpmVal}}" onInput="{{bpmChange}}" title="Manual BPM (used when no MIDI is playing)" style="width:56px;padding:5px 6px;border-radius:4px;border:1px solid #8f8a77;background:#17160f;color:#ffb454;font:500 8.5px 'IBM Plex Mono',monospace;outline:none;text-align:center">
-    <div style="font:500 7.5px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#8a8574">{{tempoSrcInfo}} · {{fmDivLabel}}</div>
+    <div style="font:500 7.5px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#8a8574">{{tempoSrcInfo}}</div>
   </div>
 
   <div style="display:flex;gap:16px;align-items:stretch;flex-wrap:wrap">
@@ -277,6 +278,9 @@ class Component extends DCLogic {
     this.CTLS.forEach(c=>this.P[c[1]]=c[6]);
     // --- Phase 3: tempo sync (FM RATE as free Hz or a note division of the tempo) ---
     this.P.fmSync=false; this.P.fmDivision=6; // 6 = '1/4'
+    this.P.lfoSync=false; this.P.lfoDivision=6; this.P.morphSync=false; this.P.morphDivision=6;
+    this.P.rotXSync=false; this.P.rotXDivision=6; this.P.rotYSync=false; this.P.rotYDivision=6; this.P.rotZSync=false; this.P.rotZDivision=6;
+    this.morphPh=0;
     this.FM_DIVS=[{l:'1/1',b:4},{l:'1/2.',b:3},{l:'1/1T',b:8/3},{l:'1/2',b:2},{l:'1/4.',b:1.5},{l:'1/2T',b:4/3},{l:'1/4',b:1},{l:'1/8.',b:0.75},{l:'1/4T',b:2/3},{l:'1/8',b:0.5},{l:'1/16.',b:0.375},{l:'1/8T',b:1/3},{l:'1/16',b:0.25},{l:'1/16T',b:1/6},{l:'1/32',b:0.125},{l:'1/32T',b:1/12},{l:'1/64',b:0.0625}];
     this.midiBpm=120;
     // --- Phase 2: dynamic EQ (biquad cascade computed in process(); analyzer = the EQ view) ---
@@ -284,6 +288,8 @@ class Component extends DCLogic {
     this.EQ_TYPES=['bell','low-shelf','high-shelf','low-cut','high-cut','notch','band-pass','tilt'];
     this.eqBands=this._eqDefaultBands(); this.eqSel=0;
     this.MODES=[['scope','SCOPE'],['wave','WAVE'],['mod','MOD'],['spectro','SPECTRO'],['analyzer','ANALYZER']];
+    this.SYNCABLE={ fmRate:{s:'fmSync',d:'fmDivision',l:'FM DIV'}, lfoRate:{s:'lfoSync',d:'lfoDivision',l:'LFO DIV'}, morph:{s:'morphSync',d:'morphDivision',l:'MORPH ÷'}, rotX:{s:'rotXSync',d:'rotXDivision',l:'ROT X ÷'}, rotY:{s:'rotYSync',d:'rotYDivision',l:'ROT Y ÷'}, rotZ:{s:'rotZSync',d:'rotZDivision',l:'ROT Z ÷'} };
+    this.SYNC_ORDER=[['fmSync','FM'],['lfoSync','LFO'],['rotXSync','ROT X'],['rotYSync','ROT Y'],['rotZSync','ROT Z'],['morphSync','MORPH']];
     // --- Phase 0: parameter history (75-step, gesture-coalesced undo/redo) ---
     this.undoStack=[]; this.redoStack=[]; this.UNDO_MAX=75; this._mutTok=0;
     // --- Phase 0: preset banks (user in localStorage; factory/research fetched or imported) ---
@@ -326,7 +332,7 @@ class Component extends DCLogic {
   mtof(n){return 440*Math.pow(2,(n-69)/12);}
   meterDot(i,lv){ const on=lv*10>=i+0.5, c=this.DOTCOLS[i<5?0:i<8?1:2]; return {bg:on?c[0]:'#8f8a77', sh:on?c[1]:'inset 0 1px 1px rgba(0,0,0,.3)'}; }
   shape(v,finc){
-    const TAU=this.TAU,P=this.P,gen=this.state.gen; let x,y,z; const m=Math.max(0,Math.min(1,P.morph+(this._mMod||0)));
+    const TAU=this.TAU,P=this.P,gen=this.state.gen; let x,y,z; const m=(this._mEff!==undefined?this._mEff:P.morph);
     if(gen==='lissajous'){ x=Math.sin(TAU*v.px); y=Math.sin(TAU*(v.py+P.phOff)); z=P.zHarm>0?Math.sin(TAU*v.pz):0; }
     else if(gen==='hyperstar'){ const th=TAU*v.s; const r=(1-m)+m*Math.cos(P.xHarm*th); x=r*Math.cos(th); y=r*Math.sin(th); z=0.45*Math.sin(P.yHarm*th)*m; }
     else if(gen==='cube'){ const u=(v.s-Math.floor(v.s))*16; const i=u|0,f=u-i; const a=this.CV[this.TOUR[i]],b=this.CV[this.TOUR[(i+1)&15]]; const rip=Math.sin(TAU*f*P.xHarm)*0.12*m; x=(a[0]+(b[0]-a[0])*f)*0.62+rip; y=(a[1]+(b[1]-a[1])*f)*0.62+rip*0.6; z=(a[2]+(b[2]-a[2])*f)*0.62; }
@@ -408,6 +414,7 @@ class Component extends DCLogic {
     const dk=1+P.drive*5,dnorm=Math.tanh(dk);
     const aC=1-Math.exp(-1/(P.attack*sr)),dC=1-Math.exp(-1/(P.decay*sr)),rC=Math.exp(-1/(P.release*sr));
     const fc=Math.min(sr*0.24,P.cutoff), fco=2*Math.sin(Math.PI*fc/sr), qd=1-Math.min(0.96,P.reso), fltOn=(P.cutoff<17900||P.reso>0.001||((P.lfoTarget|0)===2&&P.lfoDepth>0));
+    const bpm=(this.midiPlaying?this.midiBpm:(this.state.bpm||120)), divHz=(d)=>(bpm/60)/((this.FM_DIVS[(d|0)]||this.FM_DIVS[6]).b);
     const dv=this.voices[0];
     dv.gate=this.state.drone&&this.running; dv.freq=P.baseFreq; dv.vel=1; if(dv.note<0)dv.note=0;
     let blockPeak=0;
@@ -424,11 +431,15 @@ class Component extends DCLogic {
           if(this.state.loop)this.seekTo(0); else this.setPlaying(false);
         }
       }
-      const _fmHz=P.fmSync?(((this.midiPlaying?this.midiBpm:(this.state.bpm||120))/60)/((this.FM_DIVS[(P.fmDivision|0)]||this.FM_DIVS[6]).b)):P.fmRate;
+      const _fmHz=P.fmSync?divHz(P.fmDivision):P.fmRate;
       this.fmPh+=_fmHz/sr; if(this.fmPh>=1)this.fmPh-=1;
       const fmMod=1+P.fmDepth*Math.sin(TAU*this.fmPh);
-      this.lfoPh+=P.lfoRate/sr; if(this.lfoPh>=1)this.lfoPh-=1; const lfo=Math.sin(TAU*this.lfoPh)*P.lfoDepth, lt=P.lfoTarget|0; this._mMod=(lt===1?lfo*0.5:0);
-      this.ax=(this.ax+P.rotX*ROT)%TAU; this.ay=(this.ay+P.rotY*ROT)%TAU; this.az=(this.az+P.rotZ*ROT)%TAU;
+      const _lfoHz=P.lfoSync?divHz(P.lfoDivision):P.lfoRate;
+      this.lfoPh+=_lfoHz/sr; if(this.lfoPh>=1)this.lfoPh-=1; const lfo=Math.sin(TAU*this.lfoPh)*P.lfoDepth, lt=P.lfoTarget|0;
+      if(P.morphSync){ this.morphPh+=divHz(P.morphDivision)/sr; if(this.morphPh>=1)this.morphPh-=1; this._mEff=this.morphPh<0.5?this.morphPh*2:2-this.morphPh*2; } else this._mEff=Math.max(0,Math.min(1,P.morph+(lt===1?lfo*0.5:0)));
+      this.ax=(this.ax+(P.rotXSync?TAU*divHz(P.rotXDivision)/sr:P.rotX*ROT))%TAU;
+      this.ay=(this.ay+(P.rotYSync?TAU*divHz(P.rotYDivision)/sr:P.rotY*ROT))%TAU;
+      this.az=(this.az+(P.rotZSync?TAU*divHz(P.rotZDivision)/sr:P.rotZ*ROT))%TAU;
       const cY=Math.cos(this.ay),sY=Math.sin(this.ay),cX=Math.cos(this.ax),sX=Math.sin(this.ax),cZ=Math.cos(this.az),sZ=Math.sin(this.az);
       let sumX=0,sumY=0,nact=0;
       for(let vi=0;vi<this.MAXV;vi++){
@@ -522,12 +533,14 @@ class Component extends DCLogic {
   _drawMod(bctx,W,H,DPR){
     bctx.globalCompositeOperation='source-over'; bctx.fillStyle='#060d08'; bctx.fillRect(0,0,W,H);
     const P=this.P, TAU=this.TAU;
+    const dl=(sy,dv)=>sy?this.FM_DIVS[dv|0].l:'';
     const gs=[
-      {l:'FM LFO',ph:this.fmPh*TAU,amt:P.fmDepth/0.5,ex:(P.fmSync?this.FM_DIVS[P.fmDivision|0].l:P.fmRate.toFixed(1)+'Hz')},
-      {l:'ROT X',ph:this.ax||0,amt:Math.min(1,Math.abs(P.rotX))},
-      {l:'ROT Y',ph:this.ay||0,amt:Math.min(1,Math.abs(P.rotY))},
-      {l:'ROT Z',ph:this.az||0,amt:Math.min(1,Math.abs(P.rotZ))},
-      {l:'MORPH',ph:P.morph*TAU,amt:1,ex:P.morph.toFixed(2)},
+      {l:'FM',ph:this.fmPh*TAU,amt:P.fmDepth/0.5,ex:(P.fmSync?this.FM_DIVS[P.fmDivision|0].l:P.fmRate.toFixed(1)+'Hz')},
+      {l:'LFO',ph:this.lfoPh*TAU,amt:P.lfoDepth,ex:(P.lfoSync?this.FM_DIVS[P.lfoDivision|0].l:P.lfoRate.toFixed(1)+'Hz')},
+      {l:'ROT X',ph:this.ax||0,amt:Math.min(1,Math.abs(P.rotX)),ex:dl(P.rotXSync,P.rotXDivision)},
+      {l:'ROT Y',ph:this.ay||0,amt:Math.min(1,Math.abs(P.rotY)),ex:dl(P.rotYSync,P.rotYDivision)},
+      {l:'ROT Z',ph:this.az||0,amt:Math.min(1,Math.abs(P.rotZ)),ex:dl(P.rotZSync,P.rotZDivision)},
+      {l:'MORPH',ph:(P.morphSync?this.morphPh*TAU:(this._mEff!==undefined?this._mEff:P.morph)*TAU),amt:1,ex:(P.morphSync?this.FM_DIVS[P.morphDivision|0].l:(this._mEff!==undefined?this._mEff:P.morph).toFixed(2))},
     ];
     const n=gs.length, gw=W/n, r=Math.min(gw,H)*0.24, cyy=H*0.4;
     for(let i=0;i<n;i++){ const g=gs[i], cx=gw*(i+0.5);
@@ -685,7 +698,7 @@ class Component extends DCLogic {
   }
   // --- Phase 0: parameter model + history ------------------------------------
   _pmeta(id){ if(id==='master')return {min:0,max:1,step:0.001}; if(id==='eqMix')return {min:0,max:1,step:0.001}; if(id==='eqOut')return {min:-24,max:24,step:0.1}; const c=this.CTLS.find(x=>x[1]===id); return c?{min:c[3],max:c[4],step:c[5]}:null; }
-  _paramIds(){ return this.CTLS.map(c=>c[1]).concat('master','fmSync','fmDivision','eqMix','eqOut'); }
+  _paramIds(){ return this.CTLS.map(c=>c[1]).concat('master','fmSync','fmDivision','eqMix','eqOut','lfoSync','lfoDivision','morphSync','morphDivision','rotXSync','rotXDivision','rotYSync','rotYDivision','rotZSync','rotZDivision'); }
   snapshot(){ const p={}; this._paramIds().forEach(id=>{ p[id]=this.P[id]; }); return {params:p, gen:this.state.gen}; }
   applySnapshot(s){ if(!s)return; this._mutTok++; if(s.params)this._paramIds().forEach(id=>{ if(s.params[id]!==undefined)this.P[id]=s.params[id]; }); this.setState(s.gen?{gen:s.gen}:{}); }
   pushUndo(before){ this.undoStack.push(before); if(this.undoStack.length>this.UNDO_MAX)this.undoStack.shift(); this.redoStack.length=0; }
@@ -694,7 +707,7 @@ class Component extends DCLogic {
   redo(){ if(!this.redoStack.length)return; this.undoStack.push(this.snapshot()); this.applySnapshot(this.redoStack.pop()); }
   // --- Phase 0: presets -----------------------------------------------------
   _clampParam(id,v){ const m=this._pmeta(id); if(!m)return v; if(typeof v!=='number'||!isFinite(v))return this.P[id]; v=Math.max(m.min,Math.min(m.max,v)); if(m.step>=1)v=Math.round(v/m.step)*m.step; return v; }
-  _defaultParams(){ const p={master:0.5,fmSync:false,fmDivision:6,eqMix:1,eqOut:0}; this.CTLS.forEach(c=>{ p[c[1]]=c[6]; }); return p; }
+  _defaultParams(){ const p={master:0.5,fmSync:false,fmDivision:6,eqMix:1,eqOut:0,lfoSync:false,lfoDivision:6,morphSync:false,morphDivision:6,rotXSync:false,rotXDivision:6,rotYSync:false,rotYDivision:6,rotZSync:false,rotZDivision:6}; this.CTLS.forEach(c=>{ p[c[1]]=c[6]; }); return p; }
   _curBank(){ return (this.banks[this.curBankKey]||[]).filter(p=>p&&(p.synth||p.params)); } // hide EQ-only presets until the Phase 2 EQ exists
   applyPreset(p,record){
     if(!p)return;
@@ -732,8 +745,8 @@ class Component extends DCLogic {
   _persistUser(){ try{ localStorage.setItem('synesthesia_presets_v1', JSON.stringify(this.banks.user)); return true; }catch(e){ console.warn('Synesthesia: user presets could not be saved to localStorage (in-memory only this session):', e); return false; } }
   navPreset(dir){ const bank=this._curBank(); if(!bank.length)return; let i=this.presetIdx; i=(i<0?(dir>0?0:bank.length-1):i+dir); i=((i%bank.length)+bank.length)%bank.length; this.presetIdx=i; this.applyPreset(bank[i]); }
   pickPreset(gi){ const bank=this._curBank(); if(gi>=0&&gi<bank.length){ this.presetIdx=gi; this.applyPreset(bank[gi]); } this.setState({presetOpen:false}); }
-  divDown(e){ e.preventDefault(); this._mutTok++; const el=e.currentTarget; el.setPointerCapture(e.pointerId); const sy=e.clientY, si=this.P.fmDivision|0; const before=this.snapshot(); const move=ev=>{ const ni=Math.max(0,Math.min(this.FM_DIVS.length-1,Math.round(si+(sy-ev.clientY)/18))); if(ni!==(this.P.fmDivision|0)){ this.P.fmDivision=ni; this.setState({}); } }; const up=()=>{ this.pushUndoIfChanged(before); el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); }; el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up); }
-  toggleSync(){ const before=this.snapshot(); this.P.fmSync=!this.P.fmSync; this.pushUndo(before); this.setState({}); }
+  divDown(e,divKey){ e.preventDefault(); this._mutTok++; const el=e.currentTarget; el.setPointerCapture(e.pointerId); const sy=e.clientY, si=this.P[divKey]|0; const before=this.snapshot(); const move=ev=>{ const ni=Math.max(0,Math.min(this.FM_DIVS.length-1,Math.round(si+(sy-ev.clientY)/18))); if(ni!==(this.P[divKey]|0)){ this.P[divKey]=ni; this.setState({}); } }; const up=()=>{ this.pushUndoIfChanged(before); el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); }; el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up); }
+  toggleSync(key){ const before=this.snapshot(); this.P[key]=!this.P[key]; this.pushUndo(before); this.setState({}); }
   // --- Phase 2: EQ (RBJ biquads + per-block dynamics) -----------------------
   _eqDefaultBands(){ const d=()=>({on:false,mode:'down',threshDb:-24,ratio:2,rangeDb:0,attackMs:10,releaseMs:120}); return [
     {type:'bell',freqHz:120,gainDb:0,q:1,on:true,dyn:d()},{type:'bell',freqHz:500,gainDb:0,q:1,on:true,dyn:d()},
@@ -891,7 +904,8 @@ class Component extends DCLogic {
       id,label,
       params:this.CTLS.filter(c=>c[0]===id).map(def=>{
         const [,pid,plabel,min,max,,,fmt]=def;
-        if(pid==='fmRate'&&P.fmSync){ const di=P.fmDivision|0; return { id:pid,label:'FM DIV',val:this.FM_DIVS[di].l,ptr:ptrStyle(di/(this.FM_DIVS.length-1),4,12,18),onDown:e=>this.divDown(e) }; }
+        const _sc=this.SYNCABLE[pid];
+        if(_sc&&P[_sc.s]){ const di=P[_sc.d]|0; return { id:pid,label:_sc.l,val:this.FM_DIVS[di].l,ptr:ptrStyle(di/(this.FM_DIVS.length-1),4,12,18),onDown:e=>this.divDown(e,_sc.d) }; }
         const frac=(P[pid]-min)/(max-min);
         return { id:pid,label:plabel,val:fmt(P[pid]),ptr:ptrStyle(frac,4,12,18),onDown:e=>this.dialDown(e,def) };
       }),
@@ -1015,11 +1029,9 @@ class Component extends DCLogic {
       eqDynToggle:()=>this.eqToggleDyn(), eqChips, eqDynChips, eqGlobChips, eqChipStyle, eqChipLabelStyle, eqChipValStyle,
       texPanelLabel:texBank.label, texParams:texBank.params, texTabLabel:texOtherLabel, texTabToggle:()=>this.setState({texTab:texOther}),
       presetOpen:s.presetOpen, presetToggle:()=>this.setState({presetOpen:!s.presetOpen}), presetClose:()=>this.setState({presetOpen:false}), presetMenu,
-      fmSyncOn:P.fmSync, fmSyncToggle:()=>this.toggleSync(),
+      syncBtns:this.SYNC_ORDER.map(sb=>({ label:sb[1], toggle:()=>this.toggleSync(sb[0]), style:Object.assign({},presetBtn,{padding:'4px 8px',background:P[sb[0]]?'linear-gradient(180deg,#cfae7a,#b98f4a)':'linear-gradient(180deg,#efe9d8,#cfc9b6)',color:P[sb[0]]?'#2a2013':'#3b382f',boxShadow:P[sb[0]]?'inset 0 2px 4px rgba(0,0,0,.3),0 0 0 1px rgba(138,90,30,.4)':'0 2px 3px rgba(0,0,0,.3)'}) })),
       bpmVal:s.bpm, bpmChange:e=>{ const v=parseFloat(e.target.value); if(isFinite(v))this.setState({bpm:Math.max(20,Math.min(300,v))}); },
       tempoSrcInfo:(this.midiEvents&&this.midiEvents.length)?('MIDI '+Math.round(this.midiBpm)+' BPM'+(this.midiPlaying?' ▸':'')):'MANUAL',
-      fmDivLabel:P.fmSync?('FM '+this.FM_DIVS[P.fmDivision|0].l):('FM '+P.fmRate.toFixed(2)+' Hz'),
-      syncBtnStyle:Object.assign({},presetBtn,{background:P.fmSync?'linear-gradient(180deg,#cfae7a,#b98f4a)':'linear-gradient(180deg,#efe9d8,#cfc9b6)',color:P.fmSync?'#2a2013':'#3b382f',boxShadow:P.fmSync?'inset 0 2px 4px rgba(0,0,0,.3),0 0 0 1px rgba(138,90,30,.4)':'0 2px 3px rgba(0,0,0,.3)'}),
       genHint:g[2],
       selName:g[1],
       selPtr:ptrStyle(genIdx/(this.GENS.length-1),6,16,25),
