@@ -55,7 +55,10 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
     <div style="font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#4a463a">PRESET</div>
     <div onClick="{{bankCycle}}" title="Cycle preset bank" style="{{tagBtnStyle}}">{{bankLabel}}</div>
     <div onClick="{{presetPrev}}" title="Previous preset" style="{{navBtnStyle}}">◀</div>
-    <div onClick="{{presetToggle}}" title="Browse presets by category" style="{{presetNameStyle}}">{{presetName}} ▾</div>
+    <div onClick="{{presetToggle}}" title="Browse presets by category" style="{{presetBoxStyle}}">
+      <div ref="{{presetNameRef}}" style="{{presetTextStyle}}">{{presetName}}</div>
+      <div style="{{presetFadeStyle}}">›&nbsp;▾</div>
+    </div>
     <div onClick="{{presetNext}}" title="Next preset" style="{{navBtnStyle}}">▶</div>
     <sc-if value="{{notSaving}}" hint-placeholder-val="{{ true }}">
       <div onClick="{{presetSave}}" title="Save current settings as a user preset" style="{{presetBtnStyle}}">SAVE</div>
@@ -307,7 +310,7 @@ class Component extends DCLogic {
       ['radial-gradient(circle at 40% 35%,#ffc4b2,#e03a20)','0 0 6px rgba(235,85,55,.8)'],
     ];
     this._refs={};
-    ['beamRef','fpsRef','needleRef','fileRef','seekThumbRef','timeRef','dotsRef','presetFileRef','presetNameInputRef'].forEach(n=>{ this[n]=el=>{this._refs[n]=el; if(n==='beamRef'&&el)this.sizeBeam();}; });
+    ['beamRef','fpsRef','needleRef','fileRef','seekThumbRef','timeRef','dotsRef','presetFileRef','presetNameInputRef','presetNameRef'].forEach(n=>{ this[n]=el=>{this._refs[n]=el; if(n==='beamRef'&&el)this.sizeBeam();}; });
   }
   mtof(n){return 440*Math.pow(2,(n-69)/12);}
   meterDot(i,lv){ const on=lv*10>=i+0.5, c=this.DOTCOLS[i<5?0:i<8?1:2]; return {bg:on?c[0]:'#8f8a77', sh:on?c[1]:'inset 0 1px 1px rgba(0,0,0,.3)'}; }
@@ -534,8 +537,19 @@ class Component extends DCLogic {
     }
     bctx.fillStyle='rgba(150,255,190,0.5)'; bctx.textAlign='left'; bctx.font="600 "+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.fillText('SPECTRUM · 20Hz–20kHz · drag notch · dbl-click add · wheel Q',10*DPR,14*DPR);
   }
+  _marquee(now){
+    const pn=this._refs&&this._refs.presetNameRef; if(!pn||!pn.parentElement)return;
+    const boxW=pn.parentElement.clientWidth-24, textW=pn.scrollWidth, overflow=textW-boxW, nm=pn.textContent||'';
+    if(this._mqName!==nm){ this._mqName=nm; this._mqT0=now; }
+    if(overflow<=2){ pn.style.transform='translateX('+Math.max(0,(boxW-textW)/2).toFixed(1)+'px)'; return; }
+    const Ts=Math.max(900,overflow/55*1000), REST=5000, cyc=REST+Ts+REST+Ts; // rest, ease to end, rest, ease back
+    let t=(now-(this._mqT0||now))%cyc, off;
+    if(t<REST)off=0; else if(t<REST+Ts){ const p=(t-REST)/Ts; off=-overflow*(0.5-0.5*Math.cos(Math.PI*p)); } else if(t<REST+Ts+REST)off=-overflow; else { const p=(t-REST-Ts-REST)/Ts; off=-overflow*(1-(0.5-0.5*Math.cos(Math.PI*p))); }
+    pn.style.transform='translateX('+off.toFixed(1)+'px)';
+  }
   frame(now){
     this._raf=requestAnimationFrame(t=>this.frame(t));
+    this._marquee(now);
     const cv=this._refs.beamRef; if(!cv||!cv.width)return;
     const P=this.P,TAU=this.TAU,bctx=cv.getContext('2d'),W=cv.width,H=cv.height,DPR=this.DPR||1;
     this._fAcc=(this._fAcc||0)+(now-(this._lastT||now)); this._fCnt=(this._fCnt||0)+1; this._lastT=now;
@@ -900,8 +914,10 @@ class Component extends DCLogic {
       histInfo:this.undoStack.length+' / '+this.UNDO_MAX+' UNDO'+(this.redoStack.length?(' · '+this.redoStack.length+' REDO'):''),
       presetFileRef:this.presetFileRef,
       bankLabel:_bankLbl, tagBtnStyle:tagBtn, navBtnStyle:navBtn, presetBtnStyle:presetBtn,
-      presetName:(_dirty?'*':'')+_pname,
-      presetNameStyle:{minWidth:'150px',maxWidth:'240px',textAlign:'center',padding:'5px 10px',borderRadius:'4px',font:"500 8px 'IBM Plex Mono',monospace",color:'#ffb454',background:'#17160f',boxShadow:'inset 0 1px 3px #000',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',cursor:'pointer'},
+      presetName:(_dirty?'*':'')+_pname, presetNameRef:this.presetNameRef,
+      presetBoxStyle:{width:'200px',height:'24px',position:'relative',overflow:'hidden',borderRadius:'4px',background:'#17160f',boxShadow:'inset 0 1px 3px #000',cursor:'pointer'},
+      presetTextStyle:{position:'absolute',top:'0',left:'8px',height:'24px',display:'flex',alignItems:'center',whiteSpace:'nowrap',font:"500 8px 'IBM Plex Mono',monospace",color:'#ffb454',willChange:'transform'},
+      presetFadeStyle:{position:'absolute',right:'0',top:'0',bottom:'0',display:'flex',alignItems:'center',paddingRight:'6px',paddingLeft:'16px',background:'linear-gradient(90deg,rgba(23,22,15,0),#17160f 62%)',color:'#c89a4a',font:"600 8px 'IBM Plex Mono',monospace",letterSpacing:'.05em',pointerEvents:'none'},
       bankCycle:()=>this.switchBank(),
       presetPrev:()=>this.navPreset(-1), presetNext:()=>this.navPreset(1),
       saving:s.saving, notSaving:!s.saving, presetNameInputRef:this.presetNameInputRef, saveDefault:this._loadedName||'My Patch',
