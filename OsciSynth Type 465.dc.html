@@ -778,7 +778,7 @@ class Component extends DCLogic {
         this.node.connect(this.analyser);
       }
       this.running=true;
-      if(this._usingWorklet){ this._pushPatch(true); this._sendMidiToWorklet(); }
+      if(this._usingWorklet){ for(const bd of this.eqBands){ bd._secs=null; } this._pushPatch(true); this._sendMidiToWorklet(); } // stale SPN-era sections must not shadow telemetry
     }else{
       if(this.node)this.node.disconnect();
       if(this.wnode){ try{ this.wnode.disconnect(); }catch(e){} this._postWk({t:'panic'}); }
@@ -912,7 +912,8 @@ class Component extends DCLogic {
       for(let i=0;i<this.eqBands.length;i++){ const b=this.eqBands[i]; const hx=f2x(Math.max(20,Math.min(20000,b.freqHz))), hy=g2y(Math.max(-18,Math.min(18,b.gainDb))), col=COL[i%COL.length], rad=(i===this.eqSel?9:7)*DPR;
         bctx.globalAlpha=(i===this.eqSel?0.95:0.72); bctx.beginPath(); bctx.arc(hx,hy,rad,0,Math.PI*2); bctx.fillStyle=b.on?col:'#4a4a4a'; bctx.fill(); bctx.globalAlpha=1; bctx.lineWidth=(i===this.eqSel?2:1)*DPR; bctx.strokeStyle='#fff'; bctx.stroke();
         bctx.fillStyle='#111'; bctx.font='700 '+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.textAlign='center'; bctx.textBaseline='middle'; bctx.fillText(''+(i+1),hx,hy);
-        if(b.dyn&&b.dyn.on&&b._eff&&Math.abs(b._gr||0)>0.05){ const px=plotH/36; const len=Math.max(-plotH/3,Math.min(plotH/3,-(b._gr)*px)); // live GR tick: down = reduction
+        const effT=b.on&&!b.muted&&(!this.eqBands.some(x=>x.soloed&&x.on&&!x.muted)||b.soloed); // computed locally: worklet telemetry doesn't mirror _eff
+        if(b.dyn&&b.dyn.on&&effT&&Math.abs(b._gr||0)>0.05){ const px=plotH/36; const len=Math.max(-plotH/3,Math.min(plotH/3,-(b._gr)*px)); // live GR tick: down = reduction
           bctx.beginPath(); bctx.moveTo(hx,hy+(len>0?rad:-rad)); bctx.lineTo(hx,hy+(len>0?rad:-rad)+len); bctx.strokeStyle=col; bctx.lineWidth=3*DPR; bctx.globalAlpha=0.9; bctx.stroke(); bctx.globalAlpha=1; } }
       bctx.textBaseline='alphabetic';
     }
@@ -1009,8 +1010,8 @@ class Component extends DCLogic {
   applySnapshot(s){ if(!s)return; this._mutTok++; if(s.params)this._paramIds().forEach(id=>{ if(s.params[id]!==undefined)this.P[id]=s.params[id]; }); if(s.eqBands){ this.eqBands=this._eqPersist(s.eqBands); this.core.eqBands=this.eqBands; } this.eqSel=Math.max(0,Math.min(s.eqSel!==undefined?s.eqSel:this.eqSel,Math.max(0,this.eqBands.length-1))); if(s.eqTap!==undefined&&s.eqTap!==this.state.eqTap){ for(const bd of this.eqBands){ bd._zs=null; bd._topo=null; bd._fS=undefined; } this.state.eqTap=s.eqTap; } this.setState(s.gen?{gen:s.gen}:{}); }
   pushUndo(before){ this.undoStack.push(before); if(this.undoStack.length>this.UNDO_MAX)this.undoStack.shift(); this.redoStack.length=0; }
   pushUndoIfChanged(before){ if(!before)return; if(JSON.stringify(before)===JSON.stringify(this.snapshot()))return; this.pushUndo(before); this.setState({}); }
-  undo(){ if(!this.undoStack.length)return; this.redoStack.push(this.snapshot()); this.applySnapshot(this.undoStack.pop()); }
-  redo(){ if(!this.redoStack.length)return; this.undoStack.push(this.snapshot()); this.applySnapshot(this.redoStack.pop()); }
+  undo(){ this._eqFlushWheel(); if(!this.undoStack.length)return; this.redoStack.push(this.snapshot()); this.applySnapshot(this.undoStack.pop()); }
+  redo(){ this._eqFlushWheel(); if(!this.redoStack.length)return; this.undoStack.push(this.snapshot()); this.applySnapshot(this.redoStack.pop()); }
   // --- Phase 0: presets -----------------------------------------------------
   _clampParam(id,v){ const m=this._pmeta(id); if(!m)return v; if(typeof v!=='number'||!isFinite(v))return this.P[id]; v=Math.max(m.min,Math.min(m.max,v)); if(m.step>=1)v=Math.round(v/m.step)*m.step; return v; }
   _defaultParams(){ const p={master:0.5,fmSync:false,fmDivision:6,eqMix:1,eqOut:0,lfoSync:false,lfoDivision:6,morphSync:false,morphDivision:6,rotXSync:false,rotXDivision:6,rotYSync:false,rotYDivision:6,rotZSync:false,rotZDivision:6}; this.CTLS.forEach(c=>{ p[c[1]]=c[6]; }); return p; }
@@ -1018,7 +1019,7 @@ class Component extends DCLogic {
   applyPreset(p,record){
     if(!p)return;
     this._mutTok++; // cancel any in-flight MUTATE animation
-    const before=this.snapshot();
+    { this._eqFlushWheel(); } const before=this.snapshot();
     let gen=this.state.gen;
     if(p.params){
       const defs=this._defaultParams();
@@ -1060,8 +1061,8 @@ class Component extends DCLogic {
   _persistUser(){ try{ localStorage.setItem('synesthesia_presets_v1', JSON.stringify(this.banks.user)); return true; }catch(e){ console.warn('Synesthesia: user presets could not be saved to localStorage (in-memory only this session):', e); return false; } }
   navPreset(dir){ const bank=this._curBank(); if(!bank.length)return; let i=this.presetIdx; i=(i<0?(dir>0?0:bank.length-1):i+dir); i=((i%bank.length)+bank.length)%bank.length; this.presetIdx=i; this.applyPreset(bank[i]); }
   pickPreset(gi){ const bank=this._curBank(); if(gi>=0&&gi<bank.length){ this.presetIdx=gi; this.applyPreset(bank[gi]); } this.setState({presetOpen:false}); }
-  divDown(e,divKey){ e.preventDefault(); this._mutTok++; const el=e.currentTarget; el.setPointerCapture(e.pointerId); const sy=e.clientY, si=this.P[divKey]|0; const before=this.snapshot(); const move=ev=>{ const ni=Math.max(0,Math.min(this.FM_DIVS.length-1,Math.round(si+(sy-ev.clientY)/18))); if(ni!==(this.P[divKey]|0)){ this.P[divKey]=ni; this.setState({}); } }; const up=()=>{ this.pushUndoIfChanged(before); el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); }; el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up); }
-  toggleSync(key){ const before=this.snapshot(); this.P[key]=!this.P[key]; this.pushUndo(before); this.setState({}); }
+  divDown(e,divKey){ e.preventDefault(); this._mutTok++; const el=e.currentTarget; el.setPointerCapture(e.pointerId); const sy=e.clientY, si=this.P[divKey]|0; { this._eqFlushWheel(); } const before=this.snapshot(); const move=ev=>{ const ni=Math.max(0,Math.min(this.FM_DIVS.length-1,Math.round(si+(sy-ev.clientY)/18))); if(ni!==(this.P[divKey]|0)){ this.P[divKey]=ni; this.setState({}); } }; const up=()=>{ this.pushUndoIfChanged(before); el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); }; el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up); }
+  toggleSync(key){ { this._eqFlushWheel(); } const before=this.snapshot(); this.P[key]=!this.P[key]; this.pushUndo(before); this.setState({}); }
   // --- Phase 2: EQ (RBJ biquads + per-block dynamics) -----------------------
   _eqDefaultBands(){ return this._eqNormalize([]); } // locked default: empty EQ — just the two fixed end slots, off
   _eqDynDefault(){ return {on:false,mode:'down',threshDb:-24,ratio:2,rangeDb:0,attackMs:10,releaseMs:120}; }
@@ -1084,23 +1085,23 @@ class Component extends DCLogic {
     const num=(b0+b1+b2)**2-4*(b0*b1+4*b0*b2+b1*b2)*phi+16*b0*b2*phi*phi;
     const den=(1+a1+a2)**2-4*(a1+4*a2+a1*a2)*phi+16*a2*phi*phi; return 10*Math.log10(Math.max(1e-9,num)/Math.max(1e-9,den)); }
 
-  eqTapToggle(){ const before=this.snapshot(); const next=(this.state.eqTap==='pre')?'post':'pre'; for(const bd of this.eqBands){ bd._zs=null; bd._topo=null; bd._fS=undefined; } this.state.eqTap=next; this.pushUndoIfChanged(before); this.setState({eqTap:next}); }
+  eqTapToggle(){ { this._eqFlushWheel(); } const before=this.snapshot(); const next=(this.state.eqTap==='pre')?'post':'pre'; for(const bd of this.eqBands){ bd._zs=null; bd._topo=null; bd._fS=undefined; } this.state.eqTap=next; this.pushUndoIfChanged(before); this.setState({eqTap:next}); }
   _eqCurveSecs(sr){
     // Display sections: the SAME eased/audible values the audio uses while running (display ==
     // sound during drags); parameter targets when the engine is idle.
     const anySolo=this.eqBands.some(b=>b.soloed&&b.on&&!b.muted);
     return this.eqBands.map(b=>{
       if(!(b.on&&!b.muted&&(!anySolo||b.soloed)))return null;
-      if(this.running&&b._secs)return b._secs;
       if(this.running&&this._usingWorklet&&b._fS!==undefined)
         return this._eqSections(b,b._fS,b._gS+((b.dyn&&b.dyn.on)?(b._gr||0):0),b._qS,sr);
+      if(this.running&&!this._usingWorklet&&b._secs)return b._secs; // SPN path: local render sections
       const gr=(b.dyn&&b.dyn.on)?(b._gr||0):0;
       return this._eqSections(b,Math.max(10,Math.min(sr*0.49,b.freqHz)),b.gainDb+gr,Math.max(0.1,b.q),sr);
     });
   }
   _eqAdd(f,g){
     if(this.eqBands.filter(b=>!b.end).length>=this.EQ_MAX_MID)return; // locked cap: 12 middle bands + 2 ends
-    const before=this.snapshot();
+    { this._eqFlushWheel(); } const before=this.snapshot();
     const nb={id:++this._eqIdSeq,type:'bell',freqHz:Math.max(20,Math.min(20000,f||1000)),gainDb:Math.max(-12,Math.min(12,g||0)),q:1,on:true,slopeDbOct:12,muted:false,soloed:false,dyn:this._eqDynDefault()};
     const hiIdx=this.eqBands.findIndex(b=>b.end==='hi');
     if(hiIdx>=0)this.eqBands.splice(hiIdx,0,nb); else this.eqBands.push(nb);
@@ -1118,7 +1119,7 @@ class Component extends DCLogic {
     e.preventDefault(); this.eqSel=hit; this.setState({}); const b=this.eqBands[hit];
     { const now=performance.now(); if(this._lastHitClick&&now-this._lastHitClick<350&&this._lastHitIdx===hit){ this._lastHitClick=0; const bf=this.snapshot(); b.gainDb=0; this.pushUndoIfChanged(bf); this.setState({}); return; } this._lastHitClick=now; this._lastHitIdx=hit; } // dbl-click a handle = reset gain
     cv.setPointerCapture(e.pointerId);
-    const before=this.snapshot();
+    { this._eqFlushWheel(); } const before=this.snapshot();
     const hasG=!(b.type==='low-cut'||b.type==='high-cut'||b.type==='band-pass'); // gainless types: freq-only drag (Y is dead in the engine)
     const sx0=px, sy0=py, fx0=f2x(b.freqHz), gy0=g2y(b.gainDb);
     const move=ev=>{ const mx=ev.clientX-rect.left,my=ev.clientY-rect.top; const k=ev.shiftKey?0.15:1; const ex=fx0+(mx-sx0)*k, ey=gy0+(my-sy0)*k; b.freqHz=Math.max(16,Math.min(21000,x2f(ex))); if(hasG)b.gainDb=Math.max(-18,Math.min(18,y2g(ey))); this.setState({}); };
@@ -1127,18 +1128,20 @@ class Component extends DCLogic {
   }
   _eqGesture(){ // debounced gesture bracket for wheel/nudge bursts: first event snapshots, 400 ms silence closes the step
     if(!this._eqWhB)this._eqWhB=this.snapshot(); clearTimeout(this._eqWhT);
-    this._eqWhT=setTimeout(()=>{ this.pushUndoIfChanged(this._eqWhB); this._eqWhB=null; },400); }
+    this._eqWhT=setTimeout(()=>{ if(this._eqWhB){ const b=this._eqWhB; this._eqWhB=null; this.pushUndoIfChanged(b); } },400); }
+  _eqFlushWheel(){ // close a pending wheel gesture BEFORE any other undo boundary — keeps the stack ordered
+    if(this._eqWhB){ clearTimeout(this._eqWhT); const b=this._eqWhB; this._eqWhB=null; this.pushUndoIfChanged(b); } }
   eqWheel(e){ if(this.state.scopeMode!=='analyzer')return; const b=this.eqBands[this.eqSel]; if(!b)return; e.preventDefault(); this._eqGesture(); b.q=Math.max(0.3,Math.min(30,b.q*Math.pow(1.0015,-e.deltaY))); this.setState({}); }
-  eqChipDown(e,tgt,key,min,max,step){ e.preventDefault(); const el=e.currentTarget; el.setPointerCapture(e.pointerId); const sy=e.clientY; const obj=tgt==='band'?this.eqBands[this.eqSel]:(tgt==='dyn'?(this.eqBands[this.eqSel]||{}).dyn:this.P); if(!obj)return; const sv=obj[key]; const before=this.snapshot();
+  eqChipDown(e,tgt,key,min,max,step){ e.preventDefault(); const el=e.currentTarget; el.setPointerCapture(e.pointerId); const sy=e.clientY; const obj=tgt==='band'?this.eqBands[this.eqSel]:(tgt==='dyn'?(this.eqBands[this.eqSel]||{}).dyn:this.P); if(!obj)return; const sv=obj[key]; { this._eqFlushWheel(); } const before=this.snapshot();
     const move=ev=>{ let nv=sv+(sy-ev.clientY)/150*(max-min)*(ev.shiftKey?0.15:1); nv=Math.max(min,Math.min(max,nv)); if(step>=1)nv=Math.round(nv/step)*step; obj[key]=nv; this.setState({}); };
     const up=()=>{ this.pushUndoIfChanged(before); el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); };
     el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up); }
-  eqCycleType(){ const b=this.eqBands[this.eqSel]; if(!b||b.end)return; const before=this.snapshot(); const i=this.EQ_TYPES.indexOf(b.type); b.type=this.EQ_TYPES[(i+1)%this.EQ_TYPES.length]; this.pushUndoIfChanged(before); this.setState({}); }
-  eqToggleBandOn(){ const b=this.eqBands[this.eqSel]; if(b){ const before=this.snapshot(); b.on=!b.on; this.pushUndoIfChanged(before); this.setState({}); } }
-  eqToggleDyn(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ const before=this.snapshot(); b.dyn.on=!b.dyn.on; this.pushUndoIfChanged(before); this.setState({}); } }
-  eqToggleDynMode(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ const before=this.snapshot(); b.dyn.mode=(b.dyn.mode==='up')?'down':'up'; this.pushUndoIfChanged(before); this.setState({}); } }
-  eqToggleMute(){ const b=this.eqBands[this.eqSel]; if(b){ const before=this.snapshot(); b.muted=!b.muted; this.pushUndoIfChanged(before); this.setState({}); } }
-  eqToggleSolo(){ const b=this.eqBands[this.eqSel]; if(b){ const before=this.snapshot(); b.soloed=!b.soloed; this.pushUndoIfChanged(before); this.setState({}); } }
+  eqCycleType(){ const b=this.eqBands[this.eqSel]; if(!b||b.end)return; { this._eqFlushWheel(); } const before=this.snapshot(); const i=this.EQ_TYPES.indexOf(b.type); b.type=this.EQ_TYPES[(i+1)%this.EQ_TYPES.length]; this.pushUndoIfChanged(before); this.setState({}); }
+  eqToggleBandOn(){ const b=this.eqBands[this.eqSel]; if(b){ { this._eqFlushWheel(); } const before=this.snapshot(); b.on=!b.on; this.pushUndoIfChanged(before); this.setState({}); } }
+  eqToggleDyn(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ { this._eqFlushWheel(); } const before=this.snapshot(); b.dyn.on=!b.dyn.on; this.pushUndoIfChanged(before); this.setState({}); } }
+  eqToggleDynMode(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ { this._eqFlushWheel(); } const before=this.snapshot(); b.dyn.mode=(b.dyn.mode==='up')?'down':'up'; this.pushUndoIfChanged(before); this.setState({}); } }
+  eqToggleMute(){ const b=this.eqBands[this.eqSel]; if(b){ { this._eqFlushWheel(); } const before=this.snapshot(); b.muted=!b.muted; this.pushUndoIfChanged(before); this.setState({}); } }
+  eqToggleSolo(){ const b=this.eqBands[this.eqSel]; if(b){ { this._eqFlushWheel(); } const before=this.snapshot(); b.soloed=!b.soloed; this.pushUndoIfChanged(before); this.setState({}); } }
   eqChipWheel(e,tgt,key,min,max,step){ e.preventDefault(); const obj=tgt==='band'?this.eqBands[this.eqSel]:(tgt==='dyn'?(this.eqBands[this.eqSel]||{}).dyn:this.P); if(!obj)return; this._eqGesture();
     const fine=e.shiftKey?0.2:1; let nv=obj[key]+(e.deltaY<0?1:-1)*(step>=1?step:Math.max(step,(max-min)/200))*fine;
     nv=Math.max(min,Math.min(max,nv)); if(step>=1)nv=Math.round(nv/step)*step; obj[key]=nv; this.setState({}); }
@@ -1152,7 +1155,7 @@ class Component extends DCLogic {
     if(hit<0){ this.setState({eqMenu:null}); return; }
     this.eqSel=hit; this.setState({eqMenu:{x:Math.max(4,Math.min(px,rect.width-130)),y:Math.max(4,Math.min(py,rect.height-160)),idx:hit}});
   }
-  eqMenuAct(fn){ const before=this.snapshot(); fn(); this.pushUndoIfChanged(before); this.setState({eqMenu:null}); }
+  eqMenuAct(fn){ { this._eqFlushWheel(); } const before=this.snapshot(); fn(); this.pushUndoIfChanged(before); this.setState({eqMenu:null}); }
   _faustDsp(){
     const P=this.P, all=this.eqBands||[];
     const anySolo=all.some(b=>b.soloed&&b.on&&!b.muted);
@@ -1274,7 +1277,7 @@ class Component extends DCLogic {
     const [,id,,min,max,step]=def;
     const el=e.currentTarget; el.setPointerCapture(e.pointerId);
     const sy=e.clientY, sv=this.P[id];
-    const before=this.snapshot();
+    { this._eqFlushWheel(); } const before=this.snapshot();
     const move=ev=>{
       let nv=sv+(sy-ev.clientY)/160*(max-min);
       nv=Math.max(min,Math.min(max,nv));
@@ -1295,7 +1298,7 @@ class Component extends DCLogic {
       drive:Math.random()<0.6?0:rnd(0.1,0.7),smooth:rnd(0.05,0.5),
       hue:rnd(0,360),persist:rnd(0.35,0.9),
     };
-    const before=this.snapshot();
+    { this._eqFlushWheel(); } const before=this.snapshot();
     const from={}; for(const k in target)from[k]=this.P[k];
     const tok=++this._mutTok;
     const t0=performance.now();
@@ -1519,11 +1522,11 @@ class Component extends DCLogic {
       genHint:g[2],
       selName:g[1],
       selPtr:ptrStyle(genIdx/(this.GENS.length-1),6,16,25),
-      selNext:()=>{ const ng=this.GENS[(genIdx+1)%this.GENS.length][0]; if(ng!==s.gen)this.pushUndo(this.snapshot()); this.setState({gen:ng}); },
+      selNext:()=>{ const ng=this.GENS[(genIdx+1)%this.GENS.length][0]; if(ng!==s.gen){ this._eqFlushWheel(); this.pushUndo(this.snapshot()); } this.setState({gen:ng}); },
       selDown:e=>{
         e.preventDefault();
         const el=e.currentTarget; el.setPointerCapture(e.pointerId);
-        const sy=e.clientY, si=genIdx; const before=this.snapshot();
+        const sy=e.clientY, si=genIdx; { this._eqFlushWheel(); } const before=this.snapshot();
         const move=ev=>{
           const ni=Math.max(0,Math.min(this.GENS.length-1,si+Math.round((sy-ev.clientY)/24)));
           if(this.GENS[ni][0]!==this.state.gen)this.setState({gen:this.GENS[ni][0]});
