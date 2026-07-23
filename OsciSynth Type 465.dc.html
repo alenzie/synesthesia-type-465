@@ -251,6 +251,122 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
 </div>
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{&quot;scanlines&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Screen&quot;},&quot;glassReflection&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Screen&quot;}}">
+/* ---------------------------------------------------------------------------
+ * Wavetable import (C1) — page-side only, NEVER serialized into the worklet.
+ * parseWavetable: RIFF/WAVE (fmt 1 int16/24/32, fmt 3 float32, 0xFFFE EXTENSIBLE
+ * via SubFormat) + Serum 'clm ' chunk, and Surge 'vawt'. Structural repairs are
+ * loud (meta.truncated[]); DC/Nyquist handling belongs to mip derivation (C2),
+ * NOT here. wtHashTable: the canonical content hash (port spec) — SHA-256 over
+ * post-STRUCTURAL-repair samples as LE Float32 bytes (L then R), then
+ * frameSize/frames/channels/rawInterp as LE u32.
+ * ------------------------------------------------------------------------- */
+function wtSha256(bytes){
+  const K=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+  let h0=0x6a09e667,h1=0xbb67ae85,h2=0x3c6ef372,h3=0xa54ff53a,h4=0x510e527f,h5=0x9b05688c,h6=0x1f83d9ab,h7=0x5be0cd19;
+  const L=bytes.length, full=new Uint8Array(((L+9+63)>>6)<<6);
+  full.set(bytes); full[L]=0x80;
+  const bl=L*8; const dvv=new DataView(full.buffer);
+  dvv.setUint32(full.length-4, bl>>>0); dvv.setUint32(full.length-8, Math.floor(bl/4294967296));
+  const w=new Int32Array(64);
+  const rr=(x,n)=>(x>>>n)|(x<<(32-n));
+  for(let off=0;off<full.length;off+=64){
+    for(let i=0;i<16;i++)w[i]=dvv.getInt32(off+i*4);
+    for(let i=16;i<64;i++){ const s0=rr(w[i-15],7)^rr(w[i-15],18)^(w[i-15]>>>3), s1=rr(w[i-2],17)^rr(w[i-2],19)^(w[i-2]>>>10); w[i]=(w[i-16]+s0+w[i-7]+s1)|0; }
+    let a=h0,b=h1,c=h2,d=h3,e=h4,f=h5,g=h6,h=h7;
+    for(let i=0;i<64;i++){
+      const S1=rr(e,6)^rr(e,11)^rr(e,25), ch=(e&f)^(~e&g), t1=(h+S1+ch+K[i]+w[i])|0;
+      const S0=rr(a,2)^rr(a,13)^rr(a,22), mj=(a&b)^(a&c)^(b&c), t2=(S0+mj)|0;
+      h=g;g=f;f=e;e=(d+t1)|0;d=c;c=b;b=a;a=(t1+t2)|0;
+    }
+    h0=(h0+a)|0;h1=(h1+b)|0;h2=(h2+c)|0;h3=(h3+d)|0;h4=(h4+e)|0;h5=(h5+f)|0;h6=(h6+g)|0;h7=(h7+h)|0;
+  }
+  return [h0,h1,h2,h3,h4,h5,h6,h7].map(x=>('00000000'+((x>>>0).toString(16))).slice(-8)).join('');
+}
+function wtHashTable(t){
+  const n=t.dataL.length+(t.dataR?t.dataR.length:0);
+  const buf=new ArrayBuffer(n*4+16), dvv=new DataView(buf);
+  new Float32Array(buf,0,t.dataL.length).set(t.dataL);
+  if(t.dataR)new Float32Array(buf,t.dataL.length*4,t.dataR.length).set(t.dataR);
+  let o=n*4;
+  dvv.setUint32(o,t.frameSize,true); dvv.setUint32(o+4,t.frames,true); dvv.setUint32(o+8,t.channels,true); dvv.setUint32(o+12,t.meta.interp.raw,true);
+  return wtSha256(new Uint8Array(buf));
+}
+function parseWavetable(buf){
+  const dvv=new DataView(buf), U8=new Uint8Array(buf);
+  const tag=(o)=>String.fromCharCode(U8[o],U8[o+1],U8[o+2],U8[o+3]);
+  if(buf.byteLength<12)throw new Error('File too short to be a wavetable.');
+  const truncated=[];
+  const finish=(frameSize,frames,channels,dataL,dataR,meta)=>{
+    let peak=0;
+    for(let i=0;i<dataL.length;i++){ const a=Math.abs(dataL[i]); if(a>peak)peak=a; }
+    if(dataR)for(let i=0;i<dataR.length;i++){ const a=Math.abs(dataR[i]); if(a>peak)peak=a; }
+    if(peak>1){ const g=1/peak; for(let i=0;i<dataL.length;i++)dataL[i]*=g; if(dataR)for(let i=0;i<dataR.length;i++)dataR[i]*=g; meta.truncated.push('peak-normalized from '+peak.toFixed(3)); }
+    return {frameSize,frames,channels,dataL,dataR,meta};
+  };
+  if(tag(0)==='vawt'){
+    const frameSize=dvv.getUint32(4,true), frames=dvv.getUint16(8,true), flags=dvv.getUint16(10,true);
+    if(flags&0x10)throw new Error('This .wt is flagged as a sample, not a wavetable.');
+    if(frameSize<2||(frameSize&(frameSize-1)))throw new Error('Invalid .wt cycle size '+frameSize+'.');
+    const isInt=!!(flags&0x40), full=!!(flags&0x80), n=frameSize*frames;
+    const need=12+n*(isInt?2:4);
+    if(buf.byteLength<need)throw new Error('.wt data shorter than header claims.');
+    const dataL=new Float32Array(n);
+    if(isInt){ const sc=full?32768:16384; for(let i=0;i<n;i++)dataL[i]=dvv.getInt16(12+i*2,true)/sc; }
+    else for(let i=0;i<n;i++)dataL[i]=dvv.getFloat32(12+i*4,true);
+    let fr=frames, dl=dataL;
+    if(fr>256){ truncated.push('capped to first 256 of '+fr+' frames'); fr=256; dl=dataL.subarray(0,frameSize*256).slice(); }
+    return finish(frameSize,fr,1,dl,null,{source:'vawt',interp:{raw:1,play:1},comment:'',truncated,sampleRate:0});
+  }
+  if(tag(0)!=='RIFF'||tag(8)!=='WAVE')throw new Error('Not a RIFF/WAVE or .wt wavetable file.');
+  let o=12, fmt=null, dataOff=-1, dataLen=0, clm=null;
+  while(o+8<=buf.byteLength){
+    const id=tag(o), size=dvv.getUint32(o+4,true);
+    const body=o+8;
+    if(body+size>buf.byteLength){ truncated.push('chunk '+id.trim()+' extends past EOF — ignored tail'); break; }
+    if(id==='fmt ')fmt={o:body,size};
+    else if(id==='data'){ dataOff=body; dataLen=size; }
+    else if(id==='clm '){ let sN=''; for(let i=0;i<size&&i<64;i++)sN+=String.fromCharCode(U8[body+i]); clm=sN; }
+    o=body+size+(size&1);
+  }
+  if(!fmt)throw new Error('WAV has no fmt chunk.');
+  if(dataOff<0)throw new Error('WAV has no data chunk.');
+  let audioFormat=dvv.getUint16(fmt.o,true);
+  const channels=dvv.getUint16(fmt.o+2,true), sampleRate=dvv.getUint32(fmt.o+4,true), bits=dvv.getUint16(fmt.o+14,true);
+  if(audioFormat===0xFFFE){
+    if(fmt.size<26)throw new Error('EXTENSIBLE fmt chunk too short.');
+    audioFormat=dvv.getUint16(fmt.o+24,true); // SubFormat GUID first two bytes
+  }
+  if(audioFormat!==1&&audioFormat!==3)throw new Error('Unsupported WAV format '+audioFormat+' (need PCM or float).');
+  if(channels<1||channels>2)throw new Error(channels+'-channel WAV — wavetables are mono or stereo.');
+  const bytesPer=bits>>3;
+  if(audioFormat===1&&bits!==16&&bits!==24&&bits!==32)throw new Error('Unsupported PCM bit depth '+bits+'.');
+  if(audioFormat===3&&bits!==32)throw new Error('Unsupported float bit depth '+bits+'.');
+  let nTotal=Math.floor(dataLen/(bytesPer*channels));
+  if(nTotal<8)throw new Error('WAV data too short.');
+  const read=(idx)=>{ const off=dataOff+idx*bytesPer;
+    if(audioFormat===3)return dvv.getFloat32(off,true);
+    if(bits===16)return dvv.getInt16(off,true)/32768;
+    if(bits===32)return dvv.getInt32(off,true)/2147483648;
+    let v=U8[off]|(U8[off+1]<<8)|(U8[off+2]<<16); if(v&0x800000)v-=0x1000000; return v/8388608; };
+  let frameSize=0, rawInterp=1, source='inferred', comment='', ambiguous=false;
+  if(clm){ const mm=/^<!>(\d{1,5})\s+(\d)\d{0,7}\s*/.exec(clm); if(mm){ frameSize=parseInt(mm[1],10); rawInterp=parseInt(mm[2],10); source='clm'; comment=clm.slice(mm[0].length).replace(/[^\x20-\x7e]/g,'').trim(); } } // payload is "<!>AAAA BC000000 D" — consume the whole flags block before the comment
+  if(!frameSize){
+    const cands=[2048,1024,512,256,4096,8192].filter(fs=>nTotal>=fs&&nTotal%fs===0&&Math.floor(nTotal/fs)<=256);
+    if(!cands.length){ frameSize=2048; if(nTotal<2048)throw new Error('No usable frame size for '+nTotal+' samples.'); }
+    else { frameSize=cands[0]; ambiguous=cands.length>1; }
+  }
+  let frames=Math.floor(nTotal/frameSize);
+  if(frames<1)throw new Error('Shorter than one '+frameSize+'-sample frame.');
+  if(nTotal%frameSize){ truncated.push('dropped a partial trailing frame ('+(nTotal%frameSize)+' samples)'); nTotal=frames*frameSize; }
+  if(frames>256){ truncated.push('capped to first 256 of '+frames+' frames'); frames=256; nTotal=frameSize*256; }
+  const dataL=new Float32Array(frameSize*frames), dataR=channels===2?new Float32Array(frameSize*frames):null;
+  for(let i=0;i<frameSize*frames;i++){
+    if(channels===2){ dataL[i]=read(i*2); dataR[i]=read(i*2+1); } else dataL[i]=read(i);
+  }
+  const meta={source,interp:{raw:rawInterp,play:rawInterp===0?0:1},comment,truncated,sampleRate};
+  if(ambiguous)meta.ambiguous=true;
+  return finish(frameSize,frames,channels,dataL,dataR,meta);
+}
 /* ============================================================================
  * SynthCore — the ENTIRE audio engine as one self-contained, allocation-free
  * class (Phase 1). No DOM/window/dc-runtime references: it runs on the main
