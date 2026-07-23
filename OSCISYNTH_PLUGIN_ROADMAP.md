@@ -41,9 +41,10 @@ Un-interviewed details use a stated **default** you can override.
 
 ## 1. Architecture at a glance
 
-**Now (browser):** `OsciSynth Type 465.dc.html` — a `DCLogic` class runs an FM/oscilloscope synth on a
-**deprecated `ScriptProcessorNode`** (main thread). Params live in a plain `this.P` object mutated directly by
-knob handlers. No store, no undo, no presets. Output L/R **is** the oscilloscope X/Y beam.
+**Now (browser):** `OsciSynth Type 465.dc.html` — the audio engine is **`SynthCore`**, a self-contained
+class rendering inside an **AudioWorklet** (128-frame quanta; ScriptProcessor fallback drives the same core
+when worklets are unavailable). The UI `Component` talks to it via an ordered patch/note protocol and reads
+telemetry mirrored into a local core instance. Output L/R **is** the oscilloscope X/Y beam.
 
 **Target (browser, refactored):**
 ```
@@ -75,9 +76,10 @@ figure. That's why decision #3 is a toggle, and why the beam tap point is switch
 - [ ] Real-units canonical values + per-param `toNorm/fromNorm` skew (frequency = log) — this is what host automation consumes later.
 
 ### Phase 1 — Retire ScriptProcessorNode → AudioWorklet  *(prereq for dynamic EQ + the C++ port)*
-- [ ] Move `process()` + `shape()` into an `AudioWorkletProcessor` (audio-render thread, 128-frame quantum). No allocation in `process`; pre-allocate all typed arrays.
-- [ ] Beam samples (`ringX/ringY`) → UI via a **SharedArrayBuffer lock-free ring** (padenot/ringbuf.js pattern). *(Needs COOP/COEP cross-origin-isolation headers — verify the host can send them; this is the one hosting gotcha.)*
-- [ ] Forces the audio-thread / UI-thread split you need anyway for iPlug2 — de-risks the port in familiar JS.
+- [x] Move the engine into an `AudioWorkletProcessor` *(done 2026-07-23: the whole engine is `SynthCore` — one pure, allocation-light class with injected RNG and absolute-counter cadences (2048 detector window / 128 easing, host-block independent); serialized into a blob worklet module at runtime; verified BIT-IDENTICAL to the pre-refactor engine via 4-scenario golden renders and to the SPN path via a headless protocol harness)*.
+- [x] Beam samples → UI *(done via 256-sample transferable ping-pong pool + telemetry mailbox written into the local core mirror — works from `file://` with no COOP/COEP; drop-not-block backpressure. SharedArrayBuffer ring remains a hosted-deploy upgrade path when `crossOriginIsolated`)*.
+- [x] Audio-thread / UI-thread split forced *(ordered patch/note protocol with params-before-note flush, stable band-id merge; ScriptProcessor kept as an automatic fallback driving the SAME SynthCore — one core, two hosts)*.
+- [ ] Owner browser pass: W0 spike (blob `addModule` on `file://`, Chrome + Firefox), glitch test under UI load, forced-SPN flag check (`this._forceSPN`). Detail: `PHASE1_WORKLET_PLAN.md`.
 
 ### Phase 2 — EQ + spectrograph  *(the big feature)*
 - [x] **Portable biquad module** *(done: `_eqCoeffs` + `_eqSections` — Butterworth-staggered cuts 12/24/48/96, real ±g/2 tilt, depth notch)* (framework-agnostic pure math): `computeCoeffs(type, freq, Q, gainDb, Fs)` (RBJ cookbook) + **TDF-II** per-sample `process`. Butterworth-**staggered Q** for cut slopes (12/24/48/96 dB/oct). `Fs`-parametric (host rate varies).
