@@ -70,14 +70,14 @@ let worst=0; for(let i=0;i<TOT;i++){ worst=Math.max(worst,Math.abs(refL[i]-wkL[i
 console.log('SPN vs worklet audio max-abs:', worst, worst===0?'BIT-IDENTICAL':'DIFFERS');
 
 // compare beam stream (chunks concatenated) vs the SPN host's ring content
-const beamFlat=new Float32Array(beamOut.length*256);
-beamOut.forEach((b,i)=>beamFlat.set(b.x,i*256));
-// SPN host wrote TOT beam samples through the ring; last 16384 remain. Compare the final 16384 region.
-const RING=16384; const refTail=new Float32Array(RING);
-for(let i=0;i<RING;i++)refTail[i]=ref.ringX[(ref.rw+i)&(RING-1)];
-const wkTail=beamFlat.slice(beamFlat.length-RING);
-let bw=0; for(let i=0;i<RING;i++)bw=Math.max(bw,Math.abs(refTail[i]-wkTail[i]));
-console.log('beam chunks', beamOut.length, '(expected', TOT/256+')', 'tail max-abs:', bw, bw===0?'BIT-IDENTICAL':'DIFFERS');
+const beamFlat=new Float32Array(beamOut.length*256), beamFlatY=new Float32Array(beamOut.length*256);
+beamOut.forEach((b,i)=>{ beamFlat.set(b.x,i*256); beamFlatY.set(b.y,i*256); });
+// SPN host wrote TOT beam samples through the ring; last 16384 remain. Compare the final 16384 region, BOTH axes.
+const RING=16384; const refTail=new Float32Array(RING), refTailY=new Float32Array(RING);
+for(let i=0;i<RING;i++){ refTail[i]=ref.ringX[(ref.rw+i)&(RING-1)]; refTailY[i]=ref.ringY[(ref.rw+i)&(RING-1)]; }
+const wkTail=beamFlat.slice(beamFlat.length-RING), wkTailY=beamFlatY.slice(beamFlatY.length-RING);
+let bw=0; for(let i=0;i<RING;i++)bw=Math.max(bw,Math.abs(refTail[i]-wkTail[i]),Math.abs(refTailY[i]-wkTailY[i]));
+console.log('beam chunks', beamOut.length, '(expected', TOT/256+')', 'X+Y tail max-abs:', bw, bw===0?'BIT-IDENTICAL':'DIFFERS');
 
 // backpressure: starve the pool (stop returning buffers) -> chunks drop, audio continues, pool never grows
 const inboxBefore=mainInbox.length;

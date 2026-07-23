@@ -172,7 +172,7 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
       </div>
       <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
         <sc-for list="{{eqChips}}" as="c" hint-placeholder-count="3"><div onPointerDown="{{c.down}}" onWheel="{{c.wheel}}" style="{{eqChipStyle}}"><span style="{{eqChipLabelStyle}}">{{c.label}}</span><span style="{{eqChipValStyle}}">{{c.val}}</span></div></sc-for>
-        <div onClick="{{eqDynToggle}}" title="Per-band dynamics on/off" style="{{eqDynBtnStyle}}">DYN</div>
+        <sc-if value="{{eqDynAvail}}" hint-placeholder-val="{{ true }}"><div onClick="{{eqDynToggle}}" title="Per-band dynamics on/off" style="{{eqDynBtnStyle}}">DYN</div></sc-if>
         <sc-if value="{{eqDynOn}}" hint-placeholder-val="{{ true }}"><div onClick="{{eqDynModeToggle}}" title="Dynamics direction: cut (down) or boost (up)" style="{{eqDynBtnStyle}}">{{eqDynModeLabel}}</div>
         <span ref="{{grSelRef}}" title="Live gain movement of the selected band (dB)" style="font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.08em;color:#8a5a1e;background:#17160f;border-radius:3px;padding:4px 7px;min-width:52px;text-align:center">GR 0.0</span></sc-if>
         <sc-for list="{{eqDynChips}}" as="c" hint-placeholder-count="5"><div onPointerDown="{{c.down}}" onWheel="{{c.wheel}}" style="{{eqChipStyle}}"><span style="{{eqChipLabelStyle}}">{{c.label}}</span><span style="{{eqChipValStyle}}">{{c.val}}</span></div></sc-for>
@@ -301,6 +301,7 @@ class SynthCore {
     return {b0:b0/a0,b1:b1/a0,b2:b2/a0,a1:a1/a0,a2:a2/a0};
   }
   _eqDepthNotch(bd){ return bd.type==='notch'&&((bd.dyn&&bd.dyn.on)||bd.gainDb!==0); }
+  _eqDynApplies(bd){ return !(bd.type==='low-cut'||bd.type==='high-cut'||bd.type==='band-pass'); } // cuts/band-pass have no gain term for GR to modulate
   _eqSections(bd,f,g,q,sr){
     const t=bd.type;
     if(t==='low-cut'||t==='high-cut'){
@@ -317,7 +318,7 @@ class SynthCore {
     for(const bd of this.eqBands){
       bd._eff=bd.on&&!bd.muted&&(!anySolo||bd.soloed);
       if(bd._acc===undefined){ bd._dz1=bd._dz2=0; bd._acc=0; bd._gr=0; }
-      if(bd.dyn&&bd.dyn.on&&bd._eff){
+      if(bd.dyn&&bd.dyn.on&&bd._eff&&this._eqDynApplies(bd)){
         const rms=Math.sqrt((bd._acc||0)/Math.max(1,n)); bd._acc=0;
         const db=20*Math.log10(Math.max(1e-6,rms)); const dt=n/sr;
         const over=db-bd.dyn.threshDb; let target=0;
@@ -1138,7 +1139,7 @@ class Component extends DCLogic {
     el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up); }
   eqCycleType(){ const b=this.eqBands[this.eqSel]; if(!b||b.end)return; { this._eqFlushWheel(); } const before=this.snapshot(); const i=this.EQ_TYPES.indexOf(b.type); b.type=this.EQ_TYPES[(i+1)%this.EQ_TYPES.length]; this.pushUndoIfChanged(before); this.setState({}); }
   eqToggleBandOn(){ const b=this.eqBands[this.eqSel]; if(b){ { this._eqFlushWheel(); } const before=this.snapshot(); b.on=!b.on; this.pushUndoIfChanged(before); this.setState({}); } }
-  eqToggleDyn(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ { this._eqFlushWheel(); } const before=this.snapshot(); b.dyn.on=!b.dyn.on; this.pushUndoIfChanged(before); this.setState({}); } }
+  eqToggleDyn(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn&&this.core._eqDynApplies(b)){ { this._eqFlushWheel(); } const before=this.snapshot(); b.dyn.on=!b.dyn.on; this.pushUndoIfChanged(before); this.setState({}); } }
   eqToggleDynMode(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ { this._eqFlushWheel(); } const before=this.snapshot(); b.dyn.mode=(b.dyn.mode==='up')?'down':'up'; this.pushUndoIfChanged(before); this.setState({}); } }
   eqToggleMute(){ const b=this.eqBands[this.eqSel]; if(b){ { this._eqFlushWheel(); } const before=this.snapshot(); b.muted=!b.muted; this.pushUndoIfChanged(before); this.setState({}); } }
   eqToggleSolo(){ const b=this.eqBands[this.eqSel]; if(b){ { this._eqFlushWheel(); } const before=this.snapshot(); b.soloed=!b.soloed; this.pushUndoIfChanged(before); this.setState({}); } }
@@ -1447,7 +1448,7 @@ class Component extends DCLogic {
     let eqChips=[],eqDynChips=[];
     if(eqSelBand){
       eqChips=[ {label:'FREQ',val:Math.round(eqSelBand.freqHz)+'',down:null} ].concat((eqSelBand.type==='low-cut'||eqSelBand.type==='high-cut'||eqSelBand.type==='band-pass')?[]:[_chip('GAIN',eqSelBand.gainDb.toFixed(1),'band','gainDb',-18,18,0.1)]).concat([ _chip('Q',eqSelBand.q.toFixed(2),'band','q',0.3,30,0.01) ]);
-      eqDynChips=[ _chip('RANGE',eqSelBand.dyn.rangeDb.toFixed(1),'dyn','rangeDb',0,18,0.1), _chip('THRESH',eqSelBand.dyn.threshDb.toFixed(0),'dyn','threshDb',-60,0,0.5), _chip('RATIO',eqSelBand.dyn.ratio.toFixed(1),'dyn','ratio',1,20,0.1), _chip('ATK',eqSelBand.dyn.attackMs.toFixed(0),'dyn','attackMs',0.5,500,0.5), _chip('REL',eqSelBand.dyn.releaseMs.toFixed(0),'dyn','releaseMs',5,5000,5) ];
+      if(this.core._eqDynApplies(eqSelBand))eqDynChips=[ _chip('RANGE',eqSelBand.dyn.rangeDb.toFixed(1),'dyn','rangeDb',0,18,0.1), _chip('THRESH',eqSelBand.dyn.threshDb.toFixed(0),'dyn','threshDb',-60,0,0.5), _chip('RATIO',eqSelBand.dyn.ratio.toFixed(1),'dyn','ratio',1,20,0.1), _chip('ATK',eqSelBand.dyn.attackMs.toFixed(0),'dyn','attackMs',0.5,500,0.5), _chip('REL',eqSelBand.dyn.releaseMs.toFixed(0),'dyn','releaseMs',5,5000,5) ];
     }
     const eqGlobChips=[ _chip('MIX',(P.eqMix*100).toFixed(0)+'%','P','eqMix',0,1,0.001), _chip('OUT',P.eqOut.toFixed(1),'P','eqOut',-24,24,0.1) ];
     const eqChipStyle={display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'ns-resize',userSelect:'none',touchAction:'none',minWidth:'52px',padding:'3px 6px',borderRadius:'4px',background:'rgba(0,0,0,.13)'};
@@ -1489,7 +1490,8 @@ class Component extends DCLogic {
       eqBandOnToggle:()=>this.eqToggleBandOn(), eqBandOnLabel:eqSelBand?(eqSelBand.on?'ON':'OFF'):'—',
       eqDynToggle:()=>this.eqToggleDyn(), eqChips, eqDynChips, eqGlobChips, eqChipStyle, eqChipLabelStyle, eqChipValStyle,
       exportFaust:()=>this.exportFaust(),
-      eqDynOn:!!(eqSelBand&&eqSelBand.dyn&&eqSelBand.dyn.on),
+      eqDynAvail:!!(eqSelBand&&this.core._eqDynApplies(eqSelBand)),
+      eqDynOn:!!(eqSelBand&&eqSelBand.dyn&&eqSelBand.dyn.on&&this.core._eqDynApplies(eqSelBand)),
       eqDynModeToggle:()=>this.eqToggleDynMode(), eqDynModeLabel:(eqSelBand&&eqSelBand.dyn&&eqSelBand.dyn.mode==='up')?'▲ UP':'▼ DOWN',
       eqMuteToggle:()=>this.eqToggleMute(), eqSoloToggle:()=>this.eqToggleSolo(),
       eqMuteStyle:Object.assign({},eqBtnStyle,(eqSelBand&&eqSelBand.muted)?{background:'linear-gradient(180deg,#d98f6a,#c06a3a)',color:'#2a1508'}:{}),

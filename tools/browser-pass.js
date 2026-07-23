@@ -1,16 +1,20 @@
 // Phase-1 browser pass via Playwright headless Chromium.
 // Verifies: app mounts from file://, AudioWorklet path engages (blob addModule), audio flows,
 // beam telemetry arrives, notes work, EQ interaction + undo, FAUST download, forced-SPN fallback.
-// Usage: node browser-pass.js [file-url] [--firefox]
-const useFF = process.argv.includes('--firefox');
+// Usage: node browser-pass.js [file-url] [--chromium | --firefox]   (default: BOTH engines)
 const { chromium, firefox } = require('playwright-core');
+const only = process.argv.includes('--firefox') ? 'firefox' : (process.argv.includes('--chromium') ? 'chromium' : null);
+const ENGINES = only ? [only] : ['chromium', 'firefox'];
 
 const URL = (process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : null)
   || 'file://' + encodeURI(require('path').resolve(__dirname, '..', 'OsciSynth Type 465.dc.html'));
-const results = [];
+let results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok, detail }); console.log((ok ? 'PASS' : 'FAIL') + '  ' + name + (detail ? '  — ' + detail : '')); };
 
-(async () => {
+async function runPass(engine) {
+  const useFF = engine === 'firefox';
+  results = [];
+  console.log('=== ' + engine.toUpperCase() + ' ===');
   const browser = await (useFF ? firefox : chromium).launch({
     headless: true,
     ...(useFF
@@ -100,6 +104,13 @@ const check = (name, ok, detail = '') => { results.push({ name, ok, detail }); c
 
   await browser.close();
   const fails = results.filter(r => !r.ok).length;
-  console.log(fails === 0 ? '\nBROWSER PASS: ALL ' + results.length + ' CHECKS GREEN' : '\n' + fails + ' CHECKS FAILED');
-  process.exit(fails ? 1 : 0);
+  console.log(fails === 0 ? engine + ': ALL ' + results.length + ' CHECKS GREEN\n' : engine + ': ' + fails + ' CHECKS FAILED\n');
+  return fails;
+}
+
+(async () => {
+  let total = 0;
+  for (const engine of ENGINES) total += await runPass(engine);
+  console.log(total === 0 ? 'BROWSER PASS: ALL ENGINES GREEN (' + ENGINES.join(' + ') + ')' : 'BROWSER PASS: ' + total + ' CHECKS FAILED');
+  process.exit(total ? 1 : 0);
 })().catch(e => { console.error('HARNESS ERROR:', e.message); process.exit(2); });
