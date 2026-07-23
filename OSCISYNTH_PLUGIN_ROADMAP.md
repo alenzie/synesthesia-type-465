@@ -80,18 +80,18 @@ figure. That's why decision #3 is a toggle, and why the beam tap point is switch
 - [ ] Forces the audio-thread / UI-thread split you need anyway for iPlug2 — de-risks the port in familiar JS.
 
 ### Phase 2 — EQ + spectrograph  *(the big feature)*
-- [ ] **Portable biquad module** (framework-agnostic pure math): `computeCoeffs(type, freq, Q, gainDb, Fs)` (RBJ cookbook) + **TDF-II** per-sample `process`. Butterworth-**staggered Q** for cut slopes (12/24/48/96 dB/oct). `Fs`-parametric (host rate varies).
-- [ ] **Band array**: `bands[i] = {type, freq, Q, gainDb, on, dynOn, rangeDb, threshDb, ratio, attackMs, releaseMs, muted, soloed}`. Add via double-click spectrum, delete via drag-off. Fixed low-cut/high-cut ends.
-- [ ] **Per-band dynamic detector** (frequency-selective): bandpass-tap the signal at the band's Freq/Q → rectify → branching attack/release envelope (reuse the file's existing `aC/rC` ballistics, lines 281/303) → dB. Gain reduction = `(levelDb - threshDb) * (1 - 1/ratio)`, clamped to `Range`, applied as a dB offset to the band's static Gain. Smooth in the **dB domain**.
-- [ ] **Coefficient smoothing** (per-block recompute + ramp / crossfade) so dragging Freq/Q/Gain doesn't zipper.
-- [ ] **Switchable tap point** (decision #3): "EQ affects visuals" on → insert before the `ringX/ringY` write; off → after (audio-only). Default off.
-- [ ] **MIX** = parallel dry/wet `(1-mix)*dry + mix*wet`; **OUT** = post-EQ dB trim. Per-band on/off, band bypass, Mute/Solo. EQ master power toggle.
-- [ ] **Analyzer view = EQ view**: toggle swaps the beam canvas for grid + filled spectrum + composite curve; all-8-knob band row below.
-  - [ ] Spectrum: AnalyserNode tap now (fixed FFT 4096, smoothing 0.8, +4.5 dB/oct tilt, 90 dB range, log 20 Hz–20 kHz) + **Freeze**/peak-hold.
-  - [ ] **Curve from the same coeffs** the audio uses (RBJ magnitude formula, no FFT) → display always equals sound. Per-band colored fills between the band's dB curve and 0 dB. Dynamic bands: static curve + translucent ghost spanning Gain…Gain±Range.
-  - [ ] **Draggable numbered handles** as DOM over canvas: X↔freq (log), Y↔gain, wheel↔Q, double-click↔reset. Each drag = **one undo gesture** (Phase 0).
-  - [ ] Axis math: `freqToX(f)=padL+W*(log10(f)-1.301)/3`; `xToFreq(x)=10^(1.301+3*(x-padL)/W)`; `gainToY(dB)=padT+Hh*(R-dB)/(2R)`.
-- [ ] EQ-only preset bank (decision #11): loading one replaces only the `bands[]` params, synth untouched.
+- [x] **Portable biquad module** *(done: `_eqCoeffs` + `_eqSections` — Butterworth-staggered cuts 12/24/48/96, real ±g/2 tilt, depth notch)* (framework-agnostic pure math): `computeCoeffs(type, freq, Q, gainDb, Fs)` (RBJ cookbook) + **TDF-II** per-sample `process`. Butterworth-**staggered Q** for cut slopes (12/24/48/96 dB/oct). `Fs`-parametric (host rate varies).
+- [x] **Band array**: `bands[i] = {type, freq, Q, gainDb, on, dynOn, rangeDb, threshDb, ratio, attackMs, releaseMs, muted, soloed}`. Add via double-click spectrum, delete via drag-off. Fixed low-cut/high-cut ends.
+- [x] **Per-band dynamic detector** (frequency-selective): bandpass-tap the signal at the band's Freq/Q → rectify → branching attack/release envelope (reuse the file's existing `aC/rC` ballistics, lines 281/303) → dB. Gain reduction = `(levelDb - threshDb) * (1 - 1/ratio)`, clamped to `Range`, applied as a dB offset to the band's static Gain. Smooth in the **dB domain**.
+- [x] **Coefficient smoothing** (per-block recompute + ramp / crossfade) so dragging Freq/Q/Gain doesn't zipper.
+- [x] **Switchable tap point** (decision #3): "EQ affects visuals" on → insert before the `ringX/ringY` write; off → after (audio-only). Default off.
+- [x] **MIX** = parallel dry/wet `(1-mix)*dry + mix*wet`; **OUT** = post-EQ dB trim. Per-band on/off, band bypass, Mute/Solo. EQ master power toggle.
+- [x] **Analyzer view = EQ view**: toggle swaps the beam canvas for grid + filled spectrum + composite curve; all-8-knob band row below.
+  - [x] Spectrum: AnalyserNode tap now (fixed FFT 4096, smoothing 0.8, +4.5 dB/oct tilt, 90 dB range, log 20 Hz–20 kHz) + **Freeze**/peak-hold.
+  - [x] **Curve from the same coeffs** the audio uses (RBJ magnitude formula, no FFT) → display always equals sound. Per-band colored fills between the band's dB curve and 0 dB. Dynamic bands: static curve + translucent ghost spanning Gain…Gain±Range.
+  - [x] **Draggable numbered handles** as DOM over canvas: X↔freq (log), Y↔gain, wheel↔Q, double-click↔reset. Each drag = **one undo gesture** (Phase 0).
+  - [x] Axis math: `freqToX(f)=padL+W*(log10(f)-1.301)/3`; `xToFreq(x)=10^(1.301+3*(x-padL)/W)`; `gainToY(dB)=padT+Hh*(R-dB)/(2R)`.
+- [x] EQ-only preset bank (decision #11): loading one replaces only the `bands[]` params, synth untouched.
 
 ### Phase 3 — Tempo sync
 - [ ] Add `fmSync` (bool, default false) + `fmDivision` (int index) to the param model (so presets + undo capture them free).
