@@ -102,9 +102,9 @@ figure. That's why decision #3 is a toggle, and why the beam tap point is switch
 - [ ] *(Plugin)* swap `bpm` for host tempo; SYNC mode derives phase from host ppq (grid-lock). Free-run for standalone/now.
 
 ### Phase 4 — Export FAUST button
-- [ ] Generate a `.dsp` for the **EQ / filter chain** from the current band array: RBJ biquads via `filters.lib`, per-band dynamics via envelope followers, `si.bus`/parallel bands, MIX + OUT. Parameterized by the live band values.
-- [ ] Wire the "Export FAUST" button + a download. *(Scope is the EQ, per decision #12 — not the geometric synth engine, which doesn't map cleanly to Faust.)*
-- [ ] *(Optional)* validate the emitted `.dsp` compiles in the online Faust IDE.
+- [x] Generate a `.dsp` for the **EQ / filter chain** from the current band array: RBJ biquads (same `_eqCoeffs` math, `ma.SR`-aware) as a serial `fi.tf22t` cascade, per-band frequency-selective dynamics (band-pass sidechain → ~46 ms RMS → dB-domain attack/release), MIX + OUT. Parameterized by the live band values (hsliders, grouped per band).
+- [x] Wire the "Export FAUST" button (↓ FAUST in the EQ BANDS row, analyzer view) + a download. *(Scope is the EQ, per decision #12 — not the geometric synth engine, which doesn't map cleanly to Faust.)*
+- [x] *(Optional)* validate the emitted `.dsp` compiles — verified against Faust 2.86.2 (faustwasm): all band types + dyn variants compile; rendered output matches the app's biquad to 0.00000 dB at a +6 dB bell test.
 
 ### Phase 5 — iPlug2 plugin port (FL Studio VST3 + CLAP)
 - [ ] Scaffold from the **iPlug2OOS** out-of-source template; targets VST3 + CLAP (+ standalone).

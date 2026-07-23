@@ -170,6 +170,7 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
         <sc-for list="{{eqDynChips}}" as="c" hint-placeholder-count="5"><div onPointerDown="{{c.down}}" style="{{eqChipStyle}}"><span style="{{eqChipLabelStyle}}">{{c.label}}</span><span style="{{eqChipValStyle}}">{{c.val}}</span></div></sc-for>
         <div style="flex:1;min-width:8px"></div>
         <sc-for list="{{eqGlobChips}}" as="c" hint-placeholder-count="2"><div onPointerDown="{{c.down}}" style="{{eqChipStyle}}"><span style="{{eqChipLabelStyle}}">{{c.label}}</span><span style="{{eqChipValStyle}}">{{c.val}}</span></div></sc-for>
+        <div onClick="{{exportFaust}}" title="Export the EQ chain as a compilable Faust .dsp" style="{{eqBtnStyle}}">↓ FAUST</div>
       </div>
     </div>
     </sc-if>
@@ -809,6 +810,98 @@ class Component extends DCLogic {
   eqCycleType(){ const b=this.eqBands[this.eqSel]; if(!b)return; const i=this.EQ_TYPES.indexOf(b.type); b.type=this.EQ_TYPES[(i+1)%this.EQ_TYPES.length]; this.setState({}); }
   eqToggleBandOn(){ const b=this.eqBands[this.eqSel]; if(b){ b.on=!b.on; this.setState({}); } }
   eqToggleDyn(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ b.dyn.on=!b.dyn.on; this.setState({}); } }
+  _faustDsp(){
+    const P=this.P, all=this.eqBands||[], act=all.filter(b=>b.on);
+    const n=v=>{ const s=String(+(+v).toFixed(6)); return (s.indexOf('.')>=0||s.indexOf('e')>=0)?s:s+'.0'; };
+    const gainless=t=>t==='low-cut'||t==='high-cut'||t==='notch'||t==='band-pass';
+    const L=[], chain=[];
+    L.push('// OsciSynth Type 465 — dynamic EQ exported as Faust (compile at https://faustide.grame.fr)');
+    L.push('// Generated '+new Date().toISOString()+' · '+act.length+' active band'+(act.length===1?'':'s')+(all.length>act.length?(' · '+(all.length-act.length)+' bypassed omitted'):''));
+    L.push('// Same RBJ biquad cascade + per-band frequency-selective dynamics as the app.');
+    L.push('// (App detects at block rate over a ~46 ms RMS window; here the window matches but GR updates per sample.)');
+    L.push('import("stdfaust.lib");');
+    L.push('');
+    L.push('process = eqst;');
+    L.push('eqst(l, r) = outL, outR with {');
+    L.push('  det = (l + r)*0.5;');
+    act.forEach((b,k)=>{
+      const i=k+1, p='bd'+i, G='v:['+i+']B'+i+' '+(b.type||'bell').toUpperCase()+'/';
+      const hasG=!gainless(b.type), dyn=!!(hasG&&b.dyn&&b.dyn.on);
+      L.push('');
+      L.push('  // band '+i+': '+b.type+(dyn?(' + dynamics ('+b.dyn.mode+')'):'')+(b.type==='tilt'?' (renders as high-shelf, app parity)':''));
+      L.push('  '+p+'_freq = hslider("'+G+'[0]FREQ [unit:Hz][scale:log]", '+n(b.freqHz)+', 20.0, 20000.0, 0.1);');
+      L.push('  '+p+'_q = hslider("'+G+'[1]Q", '+n(b.q)+', 0.3, 30.0, 0.01);');
+      if(hasG)L.push('  '+p+'_gain = hslider("'+G+'[2]GAIN [unit:dB]", '+n(b.gainDb)+', -18.0, 18.0, 0.1);');
+      if(dyn){
+        L.push('  '+p+'_range = hslider("'+G+'[3]RANGE [unit:dB]", '+n(b.dyn.rangeDb)+', -18.0, 18.0, 0.1);');
+        L.push('  '+p+'_thresh = hslider("'+G+'[4]THRESH [unit:dB]", '+n(b.dyn.threshDb)+', -60.0, 0.0, 0.5);');
+        L.push('  '+p+'_ratio = hslider("'+G+'[5]RATIO", '+n(b.dyn.ratio)+', 1.0, 20.0, 0.1);');
+        L.push('  '+p+'_att = hslider("'+G+'[6]ATK [unit:ms]", '+n(b.dyn.attackMs)+', 0.5, 500.0, 0.5);');
+        L.push('  '+p+'_rel = hslider("'+G+'[7]REL [unit:ms]", '+n(b.dyn.releaseMs)+', 5.0, 5000.0, 5.0);');
+        L.push('  '+p+'_dal = '+p+'_sw/(2.0*max(1.0, '+p+'_q));');
+        L.push('  '+p+'_da0 = 1.0 + '+p+'_dal;');
+        L.push('  '+p+'_bp = fi.tf22t('+p+'_dal/'+p+'_da0, 0.0, (0.0 - '+p+'_dal)/'+p+'_da0, (0.0 - 2.0*'+p+'_cw)/'+p+'_da0, (1.0 - '+p+'_dal)/'+p+'_da0);');
+        L.push('  '+p+'_lvldb = ba.linear2db(max(0.000001, det : '+p+'_bp : an.rms_envelope_rect(0.046)));');
+        L.push('  '+p+'_dir = select2(('+p+'_range < 0.0) | '+(b.dyn.mode==='down'?1:0)+', 1.0, 0.0 - 1.0);');
+        L.push('  '+p+'_tgt = min(max(0.0, '+p+'_lvldb - '+p+'_thresh)*(1.0 - 1.0/max(1.0, '+p+'_ratio)), abs('+p+'_range))*'+p+'_dir;');
+        L.push('  '+p+'_catt = 1.0 - exp(0.0 - 1.0/(ma.SR*max(0.0005, '+p+'_att/1000.0)));');
+        L.push('  '+p+'_crel = 1.0 - exp(0.0 - 1.0/(ma.SR*max(0.0005, '+p+'_rel/1000.0)));');
+        L.push('  '+p+'_smooth(x) = fb ~ _ with { fb(y) = y + (x - y)*select2(x < y, '+p+'_crel, '+p+'_catt); };');
+        L.push('  '+p+'_gr = '+p+'_tgt : '+p+'_smooth;');
+      }
+      L.push('  '+p+'_w = 2.0*ma.PI*max(10.0, min(ma.SR*0.49, '+p+'_freq))/ma.SR;');
+      L.push('  '+p+'_cw = cos('+p+'_w); '+p+'_sw = sin('+p+'_w);');
+      L.push('  '+p+'_al = '+p+'_sw/(2.0*max(0.1, '+p+'_q));');
+      if(hasG){
+        L.push('  '+p+'_geff = '+p+'_gain'+(dyn?(' + '+p+'_gr'):'')+';');
+        L.push('  '+p+'_A = pow(10.0, '+p+'_geff/40.0);');
+      }
+      switch(b.type){
+        case 'low-cut':
+          L.push('  '+p+'_cb0 = (1.0 + '+p+'_cw)/2.0; '+p+'_cb1 = 0.0 - (1.0 + '+p+'_cw); '+p+'_cb2 = (1.0 + '+p+'_cw)/2.0;');
+          L.push('  '+p+'_ca0 = 1.0 + '+p+'_al; '+p+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+p+'_ca2 = 1.0 - '+p+'_al;');
+          break;
+        case 'high-cut':
+          L.push('  '+p+'_cb0 = (1.0 - '+p+'_cw)/2.0; '+p+'_cb1 = 1.0 - '+p+'_cw; '+p+'_cb2 = (1.0 - '+p+'_cw)/2.0;');
+          L.push('  '+p+'_ca0 = 1.0 + '+p+'_al; '+p+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+p+'_ca2 = 1.0 - '+p+'_al;');
+          break;
+        case 'notch':
+          L.push('  '+p+'_cb0 = 1.0; '+p+'_cb1 = 0.0 - 2.0*'+p+'_cw; '+p+'_cb2 = 1.0;');
+          L.push('  '+p+'_ca0 = 1.0 + '+p+'_al; '+p+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+p+'_ca2 = 1.0 - '+p+'_al;');
+          break;
+        case 'band-pass':
+          L.push('  '+p+'_cb0 = '+p+'_al; '+p+'_cb1 = 0.0; '+p+'_cb2 = 0.0 - '+p+'_al;');
+          L.push('  '+p+'_ca0 = 1.0 + '+p+'_al; '+p+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+p+'_ca2 = 1.0 - '+p+'_al;');
+          break;
+        case 'low-shelf':
+          L.push('  '+p+'_s = 2.0*sqrt('+p+'_A)*'+p+'_al;');
+          L.push('  '+p+'_cb0 = '+p+'_A*(('+p+'_A + 1.0) - ('+p+'_A - 1.0)*'+p+'_cw + '+p+'_s); '+p+'_cb1 = 2.0*'+p+'_A*(('+p+'_A - 1.0) - ('+p+'_A + 1.0)*'+p+'_cw); '+p+'_cb2 = '+p+'_A*(('+p+'_A + 1.0) - ('+p+'_A - 1.0)*'+p+'_cw - '+p+'_s);');
+          L.push('  '+p+'_ca0 = ('+p+'_A + 1.0) + ('+p+'_A - 1.0)*'+p+'_cw + '+p+'_s; '+p+'_ca1 = 0.0 - 2.0*(('+p+'_A - 1.0) + ('+p+'_A + 1.0)*'+p+'_cw); '+p+'_ca2 = ('+p+'_A + 1.0) + ('+p+'_A - 1.0)*'+p+'_cw - '+p+'_s;');
+          break;
+        case 'high-shelf': case 'tilt':
+          L.push('  '+p+'_s = 2.0*sqrt('+p+'_A)*'+p+'_al;');
+          L.push('  '+p+'_cb0 = '+p+'_A*(('+p+'_A + 1.0) + ('+p+'_A - 1.0)*'+p+'_cw + '+p+'_s); '+p+'_cb1 = 0.0 - 2.0*'+p+'_A*(('+p+'_A - 1.0) + ('+p+'_A + 1.0)*'+p+'_cw); '+p+'_cb2 = '+p+'_A*(('+p+'_A + 1.0) + ('+p+'_A - 1.0)*'+p+'_cw - '+p+'_s);');
+          L.push('  '+p+'_ca0 = ('+p+'_A + 1.0) - ('+p+'_A - 1.0)*'+p+'_cw + '+p+'_s; '+p+'_ca1 = 2.0*(('+p+'_A - 1.0) - ('+p+'_A + 1.0)*'+p+'_cw); '+p+'_ca2 = ('+p+'_A + 1.0) - ('+p+'_A - 1.0)*'+p+'_cw - '+p+'_s;');
+          break;
+        default:
+          L.push('  '+p+'_cb0 = 1.0 + '+p+'_al*'+p+'_A; '+p+'_cb1 = 0.0 - 2.0*'+p+'_cw; '+p+'_cb2 = 1.0 - '+p+'_al*'+p+'_A;');
+          L.push('  '+p+'_ca0 = 1.0 + '+p+'_al/'+p+'_A; '+p+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+p+'_ca2 = 1.0 - '+p+'_al/'+p+'_A;');
+          break;
+      }
+      L.push('  '+p+'_flt = fi.tf22t('+p+'_cb0/'+p+'_ca0, '+p+'_cb1/'+p+'_ca0, '+p+'_cb2/'+p+'_ca0, '+p+'_ca1/'+p+'_ca0, '+p+'_ca2/'+p+'_ca0);');
+      chain.push(p+'_flt');
+    });
+    L.push('');
+    L.push('  mix = hslider("h:[90]GLOBAL/[0]MIX", '+n(P.eqMix)+', 0.0, 1.0, 0.001);');
+    L.push('  outg = ba.db2linear(hslider("h:[90]GLOBAL/[1]OUT [unit:dB]", '+n(P.eqOut)+', -24.0, 24.0, 0.1));');
+    L.push('  wetL = l'+(chain.length?(' : '+chain.join(' : ')):'')+';');
+    L.push('  wetR = r'+(chain.length?(' : '+chain.join(' : ')):'')+';');
+    L.push('  outL = (l*(1.0 - mix) + wetL*mix)*outg;');
+    L.push('  outR = (r*(1.0 - mix) + wetR*mix)*outg;');
+    L.push('};');
+    return L.join('\n')+'\n';
+  }
+  exportFaust(){ const url=URL.createObjectURL(new Blob([this._faustDsp()],{type:'text/plain'})); const a=document.createElement('a'); a.href=url; a.download='oscisynth-type-465-eq.dsp'; document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(()=>URL.revokeObjectURL(url),2000); }
   switchBank(){ const keys=this.bankMeta.map(b=>b[0]); const cur=keys.indexOf(this.curBankKey); this.curBankKey=keys[(cur+1)%keys.length]; this.presetIdx=-1; this.setState({}); }
   importBank(doc){ if(!doc||!Array.isArray(doc.presets))return false; this.banks.custom=doc.presets; this.curBankKey='custom'; this.presetIdx=-1; this.setState({}); return true; } // imports go to their own CUSTOM slot; built-ins preserved
   async _tryFetchBanks(){ if(typeof location!=='undefined'&&location.protocol==='file:')return; const grab=async(file,key)=>{ if(this.banks[key]&&this.banks[key].length)return; try{ const r=await fetch(file); if(!r||!r.ok)return; const d=await r.json(); if(d&&Array.isArray(d.presets))this.banks[key]=d.presets; }catch(e){} }; await grab('./presets.json','factory'); await grab('./presets_further_research.json','research'); this.setState({}); }
@@ -1027,6 +1120,7 @@ class Component extends DCLogic {
       eqTypeCycle:()=>this.eqCycleType(), eqTypeLabel:eqSelBand?eqSelBand.type.toUpperCase():'—',
       eqBandOnToggle:()=>this.eqToggleBandOn(), eqBandOnLabel:eqSelBand?(eqSelBand.on?'ON':'OFF'):'—',
       eqDynToggle:()=>this.eqToggleDyn(), eqChips, eqDynChips, eqGlobChips, eqChipStyle, eqChipLabelStyle, eqChipValStyle,
+      exportFaust:()=>this.exportFaust(),
       texPanelLabel:texBank.label, texParams:texBank.params, texTabLabel:texOtherLabel, texTabToggle:()=>this.setState({texTab:texOther}),
       presetOpen:s.presetOpen, presetToggle:()=>this.setState({presetOpen:!s.presetOpen}), presetClose:()=>this.setState({presetOpen:false}), presetMenu,
       syncBtns:this.SYNC_ORDER.map(sb=>({ label:sb[1], toggle:()=>this.toggleSync(sb[0]), style:Object.assign({},presetBtn,{padding:'4px 8px',background:P[sb[0]]?'linear-gradient(180deg,#cfae7a,#b98f4a)':'linear-gradient(180deg,#efe9d8,#cfc9b6)',color:P[sb[0]]?'#2a2013':'#3b382f',boxShadow:P[sb[0]]?'inset 0 2px 4px rgba(0,0,0,.3),0 0 0 1px rgba(138,90,30,.4)':'0 2px 3px rgba(0,0,0,.3)'}) })),
