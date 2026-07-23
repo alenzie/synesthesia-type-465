@@ -10,6 +10,19 @@ anchors. Owner decision: build BEFORE the iPlug2 port, in the browser, as a `Syn
   scenarios, worklet/block equivalence stay green, browser pass stays green in both engines.
 - New capability = new harness. This unit ships `tools/wavetable-check.js` + extensions to golden /
   worklet-equiv / browser-pass.
+- 🔍 **EVERY BUILD COMMIT GETS A LIVE-SURFACE CODEX REVIEW (owner, 2026-07-23) — not optional, not batched.**
+  After each commit lands and its harnesses are green:
+  `bash "…/mini-orchie/.sprint/ultra-review-spawn.sh" --repo "$(git rev-parse --show-toplevel)" --profile deep --model gpt-5.5 --commit <the-just-landed-sha>`
+  (the sha must be HEAD — scoping a review to a commit that predates an applied fix makes the reviewer
+  re-report issues already fixed downstream). VERIFY every finding against the live code before applying;
+  drop what you cannot confirm; apply, re-run the harnesses, commit the fixes, then move to the next unit
+  of work. **Why this rule exists:** C1's parser shipped with the Surge `.wt` flag masks wrong by four bits
+  (real values `wtf_is_sample=1, wtf_int16=4, wtf_int16_is_16=8`; the code had `0x10/0x40/0x80` from a
+  secondary source), so every real Surge int16 table would have been rejected — and the fixture generator
+  carried the same wrong constants, so the suite passed. Two thorough rounds of PLAN review could not see
+  it; one live-surface review found it plus nine more (hostile-header allocation, raw `RangeError` on a
+  zero-length `fmt`, bogus EXTENSIBLE GUID accepted, NaN/Inf poisoning, host-endian hash writes, a
+  self-comparing hash test). Plan review checks intent; only live-surface review checks the bytes.
 - Single-file app: all code lives in `OsciSynth Type 465.dc.html`; pure logic goes on `SynthCore` (it must
   serialize into the worklet module) or as top-level functions beside it; UI logic on `Component`.
 
