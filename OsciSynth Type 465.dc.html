@@ -109,6 +109,7 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
         </sc-if>
         <sc-if value="{{scopeScope}}" hint-placeholder-val="{{ true }}"><div style="position:absolute;top:9px;left:12px;font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:rgba(150,255,190,.5);pointer-events:none">CH·1→X &nbsp; CH·2→Y &nbsp; XY</div></sc-if>
         <div onClick="{{scopeModeToggle}}" title="Toggle oscilloscope / spectrum analyzer" style="position:absolute;top:8px;right:12px;z-index:3;font:600 7px 'IBM Plex Mono',monospace;letter-spacing:.1em;color:#062012;background:rgba(150,255,190,.8);border-radius:3px;padding:3px 8px;cursor:pointer">{{scopeModeLabel}}</div>
+        <div onClick="{{eqTapToggle}}" title="EQ affects visuals: pre-tap routes the EQ before the beam write — reshapes the scope figure and feeds saturation/width the EQ'd signal" style="{{eqTapStyle}}">{{eqTapLabel}}</div>
         <div ref="{{fpsRef}}" style="position:absolute;bottom:8px;right:11px;font:400 7.5px 'IBM Plex Mono',monospace;color:rgba(150,255,190,.35);pointer-events:none"></div>
 
       </div>
@@ -163,10 +164,13 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
         <div style="width:1px;height:22px;background:#a49e8c;margin:0 2px"></div>
         <div onClick="{{eqTypeCycle}}" title="Cycle filter type of the selected band" style="{{eqBtnStyle}}">{{eqTypeLabel}}</div>
         <div onClick="{{eqBandOnToggle}}" title="Enable/bypass the selected band" style="{{eqBtnStyle}}">{{eqBandOnLabel}}</div>
+        <div onClick="{{eqMuteToggle}}" title="Mute the selected band" style="{{eqMuteStyle}}">M</div>
+        <div onClick="{{eqSoloToggle}}" title="Solo the selected band" style="{{eqSoloStyle}}">S</div>
       </div>
       <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
         <sc-for list="{{eqChips}}" as="c" hint-placeholder-count="3"><div onPointerDown="{{c.down}}" style="{{eqChipStyle}}"><span style="{{eqChipLabelStyle}}">{{c.label}}</span><span style="{{eqChipValStyle}}">{{c.val}}</span></div></sc-for>
         <div onClick="{{eqDynToggle}}" title="Per-band dynamics on/off" style="{{eqDynBtnStyle}}">DYN</div>
+        <sc-if value="{{eqDynOn}}" hint-placeholder-val="{{ true }}"><div onClick="{{eqDynModeToggle}}" title="Dynamics direction: cut (down) or boost (up)" style="{{eqDynBtnStyle}}">{{eqDynModeLabel}}</div></sc-if>
         <sc-for list="{{eqDynChips}}" as="c" hint-placeholder-count="5"><div onPointerDown="{{c.down}}" style="{{eqChipStyle}}"><span style="{{eqChipLabelStyle}}">{{c.label}}</span><span style="{{eqChipValStyle}}">{{c.val}}</span></div></sc-for>
         <div style="flex:1;min-width:8px"></div>
         <sc-for list="{{eqGlobChips}}" as="c" hint-placeholder-count="2"><div onPointerDown="{{c.down}}" style="{{eqChipStyle}}"><span style="{{eqChipLabelStyle}}">{{c.label}}</span><span style="{{eqChipValStyle}}">{{c.val}}</span></div></sc-for>
@@ -236,7 +240,7 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{&quot;scanlines&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Screen&quot;},&quot;glassReflection&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Screen&quot;}}">
 class Component extends DCLogic {
-  state = { power:false, drone:true, gen:'lissajous', octBase:48, playing:false, loop:false, hueFollow:true, midiName:'', midiDur:0, perf:false, warm:false, tick:0, saving:false, texTab:'tex', presetOpen:false, bpm:120, scopeMode:'scope' };
+  state = { power:false, drone:true, gen:'lissajous', octBase:48, playing:false, loop:false, hueFollow:true, midiName:'', midiDur:0, perf:false, warm:false, tick:0, saving:false, texTab:'tex', presetOpen:false, bpm:120, scopeMode:'scope', eqTap:'post', eqFreeze:false };
   constructor(props){
     super(props);
     this.TAU = Math.PI*2;
@@ -421,7 +425,7 @@ class Component extends DCLogic {
     dv.gate=this.state.drone&&this.running; dv.freq=P.baseFreq; dv.vel=1; if(dv.note<0)dv.note=0;
     let blockPeak=0;
     this._eqActive=this.eqBands&&this.eqBands.length>0; if(this._eqActive)this._eqPrep(sr,n);
-    const eqMix=this.P.eqMix, eqOutG=Math.pow(10,this.P.eqOut/20);
+    const eqMix=this.P.eqMix, eqOutG=Math.pow(10,this.P.eqOut/20); this._eqMix=eqMix; this._eqOutG=eqOutG; this._eqPre=(this.state.eqTap==='pre');
     for(let i=0;i<n;i++){
       if(this.midiPlaying){
         this.songTime+=1/sr;
@@ -473,26 +477,14 @@ class Component extends DCLogic {
         this.svLY+=fcoS*this.svBY; const hY=y-this.svLY-qd*this.svBY; this.svBY+=fcoS*hY; y=this.svLY;
         if(!isFinite(this.svLX)||Math.abs(this.svLX)>8){this.svLX=0;this.svBX=0;} if(!isFinite(this.svLY)||Math.abs(this.svLY)>8){this.svLY=0;this.svBY=0;} }
       if(P.jitter>0){x+=(Math.random()-0.5)*P.jitter*0.08;y+=(Math.random()-0.5)*P.jitter*0.08;}
+      if(this._eqActive&&this._eqPre){ this._eqApply(x,y,i,sr); x=this._eqL; y=this._eqR; } // EQ->SCOPE: EQ before the beam write (and before tanh/width) — reshapes the figure
       this.ringX[this.rw]=x;this.ringY[this.rw]=y;this.rw=(this.rw+1)&this.RM;
       this.curGain+=(targetGain-this.curGain)*0.0015;
       let oL=Math.tanh(x*1.1)*this.curGain*0.85, oR=Math.tanh(y*1.1)*this.curGain*0.85;
       if(lt===4){ const am=1+lfo*0.5; oL*=am; oR*=am; }
       if(P.width>0){ const mid=(oL+oR)*0.5, side=(oL-oR)*0.5*(1+P.width*1.6); oL=mid+side; oR=mid-side; }
       let eL=oL,eR=oR;
-      if(this._eqActive){
-        if((i&127)===0)this._eqTickSub(sr);
-        const det=(oL+oR)*0.5;
-        for(let bi=0;bi<this.eqBands.length;bi++){ const bd=this.eqBands[bi];
-          if(bd._dc){ const d=bd._dc; const dm=d.b0*det+bd._dz1; bd._dz1=d.b1*det+bd._dz2-d.a1*dm; bd._dz2=d.b2*det-d.a2*dm; bd._acc+=dm*dm; }
-          if(!bd._eff||!bd._secs)continue;
-          for(let si=0;si<bd._secs.length;si++){ const c=bd._secs[si], z=bd._zs[si];
-            let o=c.b0*eL+z.z1L; z.z1L=c.b1*eL+z.z2L-c.a1*o; z.z2L=c.b2*eL-c.a2*o; eL=o;
-            o=c.b0*eR+z.z1R; z.z1R=c.b1*eR+z.z2R-c.a1*o; z.z2R=c.b2*eR-c.a2*o; eR=o;
-          }
-        }
-        eL=(oL*(1-eqMix)+eL*eqMix)*eqOutG; eR=(oR*(1-eqMix)+eR*eqMix)*eqOutG;
-        if(!isFinite(eL))eL=0; if(!isFinite(eR))eR=0;
-      }
+      if(this._eqActive&&!this._eqPre){ this._eqApply(oL,oR,i,sr); eL=this._eqL; eR=this._eqR; }
       L[i]=eL;R[i]=eR;
       const pk=Math.max(Math.abs(eL),Math.abs(eR)); if(pk>blockPeak)blockPeak=pk;
     }
@@ -810,6 +802,24 @@ class Component extends DCLogic {
     }
   }
   _eqDepthNotch(bd){ return bd.type==='notch'&&((bd.dyn&&bd.dyn.on)||bd.gainDb!==0); } // depth-limited notch = high-Q bell; static gain-0 notch stays full-kill
+  _eqApply(aL,aR,i,sr){
+    // One cascade implementation for both tap points (post = audio-only, pre = beam+audio).
+    // Detector always taps the EQ-input dry mono sum — same rule both modes and in Faust.
+    if((i&127)===0)this._eqTickSub(sr);
+    const det=(aL+aR)*0.5; let eL=aL,eR=aR;
+    for(let bi=0;bi<this.eqBands.length;bi++){ const bd=this.eqBands[bi];
+      if(bd._dc){ const d=bd._dc; const dm=d.b0*det+bd._dz1; bd._dz1=d.b1*det+bd._dz2-d.a1*dm; bd._dz2=d.b2*det-d.a2*dm; bd._acc+=dm*dm; }
+      if(!bd._eff||!bd._secs)continue;
+      for(let si=0;si<bd._secs.length;si++){ const c=bd._secs[si], z=bd._zs[si];
+        let o=c.b0*eL+z.z1L; z.z1L=c.b1*eL+z.z2L-c.a1*o; z.z2L=c.b2*eL-c.a2*o; eL=o;
+        o=c.b0*eR+z.z1R; z.z1R=c.b1*eR+z.z2R-c.a1*o; z.z2R=c.b2*eR-c.a2*o; eR=o;
+      }
+    }
+    const mix=this._eqMix, og=this._eqOutG;
+    eL=(aL*(1-mix)+eL*mix)*og; eR=(aR*(1-mix)+eR*mix)*og;
+    this._eqL=isFinite(eL)?eL:0; this._eqR=isFinite(eR)?eR:0;
+  }
+  eqTapToggle(){ const pre=this.state.eqTap==='pre'; for(const bd of this.eqBands){ bd._zs=null; bd._topo=null; bd._fS=undefined; } this.setState({eqTap:pre?'post':'pre'}); }
   _eqSections(bd,f,g,q,sr){
     const t=bd.type;
     if(t==='low-cut'||t==='high-cut'){
@@ -888,6 +898,9 @@ class Component extends DCLogic {
   eqCycleType(){ const b=this.eqBands[this.eqSel]; if(!b||b.end)return; const before=this.snapshot(); const i=this.EQ_TYPES.indexOf(b.type); b.type=this.EQ_TYPES[(i+1)%this.EQ_TYPES.length]; this.pushUndoIfChanged(before); this.setState({}); }
   eqToggleBandOn(){ const b=this.eqBands[this.eqSel]; if(b){ const before=this.snapshot(); b.on=!b.on; this.pushUndoIfChanged(before); this.setState({}); } }
   eqToggleDyn(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ const before=this.snapshot(); b.dyn.on=!b.dyn.on; this.pushUndoIfChanged(before); this.setState({}); } }
+  eqToggleDynMode(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ const before=this.snapshot(); b.dyn.mode=(b.dyn.mode==='up')?'down':'up'; this.pushUndoIfChanged(before); this.setState({}); } }
+  eqToggleMute(){ const b=this.eqBands[this.eqSel]; if(b){ const before=this.snapshot(); b.muted=!b.muted; this.pushUndoIfChanged(before); this.setState({}); } }
+  eqToggleSolo(){ const b=this.eqBands[this.eqSel]; if(b){ const before=this.snapshot(); b.soloed=!b.soloed; this.pushUndoIfChanged(before); this.setState({}); } }
   _faustDsp(){
     const P=this.P, all=this.eqBands||[];
     const anySolo=all.some(b=>b.soloed&&b.on&&!b.muted);
@@ -1221,6 +1234,14 @@ class Component extends DCLogic {
       eqBandOnToggle:()=>this.eqToggleBandOn(), eqBandOnLabel:eqSelBand?(eqSelBand.on?'ON':'OFF'):'—',
       eqDynToggle:()=>this.eqToggleDyn(), eqChips, eqDynChips, eqGlobChips, eqChipStyle, eqChipLabelStyle, eqChipValStyle,
       exportFaust:()=>this.exportFaust(),
+      eqDynOn:!!(eqSelBand&&eqSelBand.dyn&&eqSelBand.dyn.on),
+      eqDynModeToggle:()=>this.eqToggleDynMode(), eqDynModeLabel:(eqSelBand&&eqSelBand.dyn&&eqSelBand.dyn.mode==='up')?'▲ UP':'▼ DOWN',
+      eqMuteToggle:()=>this.eqToggleMute(), eqSoloToggle:()=>this.eqToggleSolo(),
+      eqMuteStyle:Object.assign({},eqBtnStyle,(eqSelBand&&eqSelBand.muted)?{background:'linear-gradient(180deg,#d98f6a,#c06a3a)',color:'#2a1508'}:{}),
+      eqSoloStyle:Object.assign({},eqBtnStyle,(eqSelBand&&eqSelBand.soloed)?{background:'linear-gradient(180deg,#cfae7a,#b98f4a)',color:'#2a2013'}:{}),
+      eqTapToggle:()=>this.eqTapToggle(),
+      eqTapLabel:(s.eqTap==='pre')?'EQ→SCOPE ◉':'EQ→SCOPE ○',
+      eqTapStyle:{position:'absolute',top:'30px',right:'12px',zIndex:3,font:"600 7px 'IBM Plex Mono',monospace",letterSpacing:'.1em',color:(s.eqTap==='pre')?'#062012':'rgba(150,255,190,.75)',background:(s.eqTap==='pre')?'rgba(150,255,190,.8)':'rgba(20,60,40,.55)',borderRadius:'3px',padding:'3px 8px',cursor:'pointer'},
       texPanelLabel:texBank.label, texParams:texBank.params, texTabLabel:texOtherLabel, texTabToggle:()=>this.setState({texTab:texOther}),
       presetOpen:s.presetOpen, presetToggle:()=>this.setState({presetOpen:!s.presetOpen}), presetClose:()=>this.setState({presetOpen:false}), presetMenu,
       syncBtns:this.SYNC_ORDER.map(sb=>({ label:sb[1], toggle:()=>this.toggleSync(sb[0]), style:Object.assign({},presetBtn,{padding:'4px 8px',background:P[sb[0]]?'linear-gradient(180deg,#cfae7a,#b98f4a)':'linear-gradient(180deg,#efe9d8,#cfc9b6)',color:P[sb[0]]?'#2a2013':'#3b382f',boxShadow:P[sb[0]]?'inset 0 2px 4px rgba(0,0,0,.3),0 0 0 1px rgba(138,90,30,.4)':'0 2px 3px rgba(0,0,0,.3)'}) })),
