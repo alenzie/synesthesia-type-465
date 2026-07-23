@@ -567,6 +567,7 @@ class Component extends DCLogic {
     ];
     this._refs={};
     ['beamRef','fpsRef','needleRef','fileRef','seekThumbRef','timeRef','dotsRef','presetFileRef','presetNameInputRef','presetNameRef','outPeakBarRef','outRmsBarRef','grSelRef'].forEach(n=>{ this[n]=el=>{this._refs[n]=el; if(n==='beamRef'&&el)this.sizeBeam();}; });
+    if(typeof window!=='undefined')window.__osci=this; // debug/automation handle (Playwright browser pass)
   }
   mtof(n){return 440*Math.pow(2,(n-69)/12);}
   meterDot(i,lv){ const on=lv*10>=i+0.5, c=this.DOTCOLS[i<5?0:i<8?1:2]; return {bg:on?c[0]:'#8f8a77', sh:on?c[1]:'inset 0 1px 1px rgba(0,0,0,.3)'}; }
@@ -739,8 +740,12 @@ class Component extends DCLogic {
     if(this._forceSPN||this._workletDead||!this.ctx.audioWorklet||typeof AudioWorkletNode==='undefined')return false;
     try{
       if(!this._wkModuleAdded){
-        const url=URL.createObjectURL(new Blob([this._workletModuleSrc()],{type:'text/javascript'}));
-        await this.ctx.audioWorklet.addModule(url); URL.revokeObjectURL(url); this._wkModuleAdded=true;
+        const src=this._workletModuleSrc();
+        // file:// blocks blob: worklet modules in Chromium — a data: URL module works from any origin.
+        // Try data: first, blob: second (some engines prefer it), else throw into the SPN fallback.
+        try{ await this.ctx.audioWorklet.addModule('data:text/javascript;base64,'+btoa(unescape(encodeURIComponent(src)))); }
+        catch(e1){ const url=URL.createObjectURL(new Blob([src],{type:'text/javascript'})); try{ await this.ctx.audioWorklet.addModule(url); } finally{ URL.revokeObjectURL(url); } }
+        this._wkModuleAdded=true;
       }
       if(!this.wnode){
         this.wnode=new AudioWorkletNode(this.ctx,'osci-core',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2]});
