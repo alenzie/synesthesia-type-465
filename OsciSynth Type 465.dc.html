@@ -480,11 +480,15 @@ class Component extends DCLogic {
       if(P.width>0){ const mid=(oL+oR)*0.5, side=(oL-oR)*0.5*(1+P.width*1.6); oL=mid+side; oR=mid-side; }
       let eL=oL,eR=oR;
       if(this._eqActive){
+        if((i&127)===0)this._eqTickSub(sr);
         const det=(oL+oR)*0.5;
-        for(let bi=0;bi<this.eqBands.length;bi++){ const bd=this.eqBands[bi]; if(!bd.on||!bd._c)continue; const c=bd._c;
-          let o=c.b0*eL+bd._z1L; bd._z1L=c.b1*eL+bd._z2L-c.a1*o; bd._z2L=c.b2*eL-c.a2*o; eL=o;
-          o=c.b0*eR+bd._z1R; bd._z1R=c.b1*eR+bd._z2R-c.a1*o; bd._z2R=c.b2*eR-c.a2*o; eR=o;
+        for(let bi=0;bi<this.eqBands.length;bi++){ const bd=this.eqBands[bi];
           if(bd._dc){ const d=bd._dc; const dm=d.b0*det+bd._dz1; bd._dz1=d.b1*det+bd._dz2-d.a1*dm; bd._dz2=d.b2*det-d.a2*dm; bd._acc+=dm*dm; }
+          if(!bd._eff||!bd._secs)continue;
+          for(let si=0;si<bd._secs.length;si++){ const c=bd._secs[si], z=bd._zs[si];
+            let o=c.b0*eL+z.z1L; z.z1L=c.b1*eL+z.z2L-c.a1*o; z.z2L=c.b2*eL-c.a2*o; eL=o;
+            o=c.b0*eR+z.z1R; z.z1R=c.b1*eR+z.z2R-c.a1*o; z.z2R=c.b2*eR-c.a2*o; eR=o;
+          }
         }
         eL=(oL*(1-eqMix)+eL*eqMix)*eqOutG; eR=(oR*(1-eqMix)+eR*eqMix)*eqOutG;
         if(!isFinite(eL))eL=0; if(!isFinite(eR))eR=0;
@@ -606,12 +610,12 @@ class Component extends DCLogic {
       const cols=Math.max(2,plotW|0);
       // coeffs computed from LIVE band params (not the audio-thread _c) so the curve is correct even when
       // powered off and updates instantly with freq/gain/Q; dynamic bands include their current gain movement
-      const cof=this.eqBands.map(b=> b.on? this._eqCoeffs(b.type,b.freqHz,b.gainDb+((b.dyn&&b.dyn.on)?(b._gr||0):0),b.q,sr) : null );
+      const cof=this._eqCurveSecs(sr);
       const xs=[]; for(let px=0;px<=cols;px++)xs.push(px);
       for(const b of this.eqBands){ if(b.on){ const cxp=(Math.log10(Math.max(20,Math.min(20000,b.freqHz)))-l0)/dec*cols; if(cxp>=0&&cxp<=cols){ xs.push(cxp-0.5,cxp,cxp+0.5); } } } // sample each apex so high-Q peaks stay pointy
       xs.sort((a,b)=>a-b);
       bctx.beginPath();
-      for(let k=0;k<xs.length;k++){ const px=xs[k]; const f=Math.pow(10,l0+dec*(px/cols)); let sum=this.P.eqOut||0; for(let bi=0;bi<cof.length;bi++){ if(cof[bi])sum+=this._eqMagDb(cof[bi],f,sr); } const y=g2y(Math.max(-18,Math.min(18,sum))); if(k===0)bctx.moveTo(padL+px,y); else bctx.lineTo(padL+px,y); }
+      for(let k=0;k<xs.length;k++){ const px=xs[k]; const f=Math.pow(10,l0+dec*(px/cols)); let sum=this.P.eqOut||0; for(let bi=0;bi<cof.length;bi++){ const ss=cof[bi]; if(ss)for(let si=0;si<ss.length;si++)sum+=this._eqMagDb(ss[si],f,sr); } const y=g2y(Math.max(-18,Math.min(18,sum))); if(k===0)bctx.moveTo(padL+px,y); else bctx.lineTo(padL+px,y); }
       bctx.strokeStyle='rgba(255,206,122,0.95)'; bctx.lineWidth=1.6*DPR; bctx.stroke();
       const COL=['#e0603a','#c8c23a','#3ac8c8','#3aa0e0','#8a6ae0','#e03a9a','#e08a3a','#6ae08a','#d0d0d0','#e0c060','#60c0e0','#c060e0'];
       for(let i=0;i<this.eqBands.length;i++){ const b=this.eqBands[i]; const hx=f2x(Math.max(20,Math.min(20000,b.freqHz))), hy=g2y(Math.max(-18,Math.min(18,b.gainDb))), col=COL[i%COL.length], rad=(i===this.eqSel?9:7)*DPR;
@@ -778,7 +782,7 @@ class Component extends DCLogic {
       case 'notch': b0=1; b1=-2*cw; b2=1; a0=1+alpha; a1=-2*cw; a2=1-alpha; break;
       case 'band-pass': b0=alpha; b1=0; b2=-alpha; a0=1+alpha; a1=-2*cw; a2=1-alpha; break;
       case 'low-shelf': { const s=2*Math.sqrt(A)*alpha; b0=A*((A+1)-(A-1)*cw+s); b1=2*A*((A-1)-(A+1)*cw); b2=A*((A+1)-(A-1)*cw-s); a0=(A+1)+(A-1)*cw+s; a1=-2*((A-1)+(A+1)*cw); a2=(A+1)+(A-1)*cw-s; break; }
-      case 'high-shelf': case 'tilt': { const s=2*Math.sqrt(A)*alpha; b0=A*((A+1)+(A-1)*cw+s); b1=-2*A*((A-1)+(A+1)*cw); b2=A*((A+1)+(A-1)*cw-s); a0=(A+1)-(A-1)*cw+s; a1=2*((A-1)-(A+1)*cw); a2=(A+1)-(A-1)*cw-s; break; }
+      case 'high-shelf': { const s=2*Math.sqrt(A)*alpha; b0=A*((A+1)+(A-1)*cw+s); b1=-2*A*((A-1)+(A+1)*cw); b2=A*((A+1)+(A-1)*cw-s); a0=(A+1)-(A-1)*cw+s; a1=2*((A-1)-(A+1)*cw); a2=(A+1)-(A-1)*cw-s; break; }
       default: b0=1+alpha*A; b1=-2*cw; b2=1-alpha*A; a0=1+alpha/A; a1=-2*cw; a2=1-alpha/A; break;
     }
     return {b0:b0/a0,b1:b1/a0,b2:b2/a0,a1:a1/a0,a2:a2/a0};
@@ -787,21 +791,68 @@ class Component extends DCLogic {
     const num=(b0+b1+b2)**2-4*(b0*b1+4*b0*b2+b1*b2)*phi+16*b0*b2*phi*phi;
     const den=(1+a1+a2)**2-4*(a1+4*a2+a1*a2)*phi+16*a2*phi*phi; return 10*Math.log10(Math.max(1e-9,num)/Math.max(1e-9,den)); }
   _eqPrep(sr,n){
+    // Block-rate half of the EQ: solo/mute gating + the per-band frequency-selective dynamics
+    // detector (block RMS -> dB-domain GR). Coefficients are built sub-block in _eqTickSub.
+    const anySolo=this.eqBands.some(b=>b.soloed&&b.on&&!b.muted);
     for(const bd of this.eqBands){
-      if(bd._z1L===undefined){ bd._z1L=bd._z2L=bd._z1R=bd._z2R=0; bd._dz1=bd._dz2=0; bd._acc=0; bd._gr=0; }
-      let g=bd.gainDb;
-      if(bd.dyn&&bd.dyn.on){
+      bd._eff=bd.on&&!bd.muted&&(!anySolo||bd.soloed);
+      if(bd._acc===undefined){ bd._dz1=bd._dz2=0; bd._acc=0; bd._gr=0; }
+      if(bd.dyn&&bd.dyn.on&&bd._eff){
         const rms=Math.sqrt((bd._acc||0)/Math.max(1,n)); bd._acc=0;
         const db=20*Math.log10(Math.max(1e-6,rms)); const dt=n/sr;
         const over=db-bd.dyn.threshDb; let target=0;
         if(over>0){ target=over*(1-1/Math.max(1,bd.dyn.ratio)); const cap=Math.abs(bd.dyn.rangeDb); if(target>cap)target=cap; }
-        target*=(bd.dyn.rangeDb<0||bd.dyn.mode==='down')?-1:1;
+        target*=(bd.dyn.mode==='up')?1:-1; // mode is the ONLY direction source (range is abs)
         const cf=1-Math.exp(-dt/Math.max(0.0005,((target<(bd._gr||0))?bd.dyn.attackMs:bd.dyn.releaseMs)/1000));
-        bd._gr=(bd._gr||0)+(target-(bd._gr||0))*cf; g=bd.gainDb+bd._gr;
+        bd._gr=(bd._gr||0)+(target-(bd._gr||0))*cf; bd._geff=bd.gainDb+bd._gr;
         bd._dc=this._eqCoeffs('band-pass',bd.freqHz,0,Math.max(1,bd.q),sr);
-      } else { bd._gr=0; bd._dc=null; }
-      bd._c=this._eqCoeffs(bd.type,bd.freqHz,g,bd.q,sr); bd._geff=g;
+      } else { bd._gr=0; bd._geff=bd.gainDb; bd._dc=null; bd._acc=0; }
     }
+  }
+  _eqDepthNotch(bd){ return bd.type==='notch'&&((bd.dyn&&bd.dyn.on)||bd.gainDb!==0); } // depth-limited notch = high-Q bell; static gain-0 notch stays full-kill
+  _eqSections(bd,f,g,q,sr){
+    const t=bd.type;
+    if(t==='low-cut'||t==='high-cut'){
+      // Butterworth-staggered cascade; user Q scales the ladder RELATIVE to Butterworth so
+      // q=0.7071 is exactly Butterworth at every slope (and N=1 degenerates to the raw q).
+      const N=Math.max(1,Math.round((bd.slopeDbOct||12)/12)), s=[];
+      for(let k=1;k<=N;k++){ const Qk=(1/(2*Math.sin((2*k-1)*Math.PI/(4*N))))*(q/0.70710678); s.push(this._eqCoeffs(t,f,0,Qk,sr)); }
+      return s;
+    }
+    if(t==='tilt')return [this._eqCoeffs('low-shelf',f,-g/2,q,sr),this._eqCoeffs('high-shelf',f,g/2,q,sr)]; // real tilt: +/- g/2 seesaw around the pivot
+    if(t==='notch')return [this._eqDepthNotch(bd)?this._eqCoeffs('bell',f,g,q,sr):this._eqCoeffs('notch',f,0,q,sr)];
+    return [this._eqCoeffs(t,f,g,q,sr)];
+  }
+  _eqTickSub(sr){
+    // Sub-block (128-sample) half: ease audible params toward UI targets and rebuild section
+    // coefficients — 128 matches the future AudioWorklet quantum so this ports unchanged.
+    const aP=1-Math.exp(-128/(sr*0.02));
+    for(const bd of this.eqBands){
+      if(!bd._eff){ bd._secs=null; bd._topo=null; continue; }
+      const fT=Math.max(10,Math.min(sr*0.49,bd.freqHz)), gT=bd.gainDb, qT=Math.max(0.1,bd.q);
+      const topo=bd.type+'|'+(bd.slopeDbOct||12)+'|'+(this._eqDepthNotch(bd)?1:0);
+      if(bd._fS===undefined||bd._topo!==topo){ bd._fS=fT; bd._gS=gT; bd._qS=qT; bd._zs=null; bd._topo=topo; }
+      else{
+        bd._fS=Math.exp(Math.log(bd._fS)+(Math.log(fT)-Math.log(bd._fS))*aP);
+        bd._gS+=(gT-bd._gS)*aP;
+        bd._qS=Math.exp(Math.log(bd._qS)+(Math.log(qT)-Math.log(bd._qS))*aP);
+        const conv=Math.abs(fT-bd._fS)<0.001*fT&&Math.abs(gT-bd._gS)<0.002&&Math.abs(qT-bd._qS)<0.001*qT;
+        if(conv){ bd._fS=fT; bd._gS=gT; bd._qS=qT; if(bd._secs&&!(bd.dyn&&bd.dyn.on))continue; }
+      }
+      bd._secs=this._eqSections(bd,bd._fS,bd._gS+(bd._gr||0),bd._qS,sr);
+      if(!bd._zs||bd._zs.length!==bd._secs.length)bd._zs=bd._secs.map(()=>({z1L:0,z2L:0,z1R:0,z2R:0}));
+    }
+  }
+  _eqCurveSecs(sr){
+    // Display sections: the SAME eased/audible values the audio uses while running (display ==
+    // sound during drags); parameter targets when the engine is idle.
+    const anySolo=this.eqBands.some(b=>b.soloed&&b.on&&!b.muted);
+    return this.eqBands.map(b=>{
+      if(!(b.on&&!b.muted&&(!anySolo||b.soloed)))return null;
+      if(this.running&&b._secs)return b._secs;
+      const gr=(b.dyn&&b.dyn.on)?(b._gr||0):0;
+      return this._eqSections(b,Math.max(10,Math.min(sr*0.49,b.freqHz)),b.gainDb+gr,Math.max(0.1,b.q),sr);
+    });
   }
   _eqAdd(f,g){
     if(this.eqBands.filter(b=>!b.end).length>=this.EQ_MAX_MID)return; // locked cap: 12 middle bands + 2 ends
@@ -838,13 +889,16 @@ class Component extends DCLogic {
   eqToggleBandOn(){ const b=this.eqBands[this.eqSel]; if(b){ const before=this.snapshot(); b.on=!b.on; this.pushUndoIfChanged(before); this.setState({}); } }
   eqToggleDyn(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ const before=this.snapshot(); b.dyn.on=!b.dyn.on; this.pushUndoIfChanged(before); this.setState({}); } }
   _faustDsp(){
-    const P=this.P, all=this.eqBands||[], act=all.filter(b=>b.on);
+    const P=this.P, all=this.eqBands||[];
+    const anySolo=all.some(b=>b.soloed&&b.on&&!b.muted);
+    const act=all.filter(b=>b.on&&!b.muted&&(!anySolo||b.soloed));
     const n=v=>{ const s=String(+(+v).toFixed(6)); return (s.indexOf('.')>=0||s.indexOf('e')>=0)?s:s+'.0'; };
-    const gainless=t=>t==='low-cut'||t==='high-cut'||t==='notch'||t==='band-pass';
+    const gainless=b=>b.type==='low-cut'||b.type==='high-cut'||b.type==='band-pass'||(b.type==='notch'&&!this._eqDepthNotch(b));
     const L=[], chain=[];
     L.push('// OsciSynth Type 465 — dynamic EQ exported as Faust (compile at https://faustide.grame.fr)');
-    L.push('// Generated '+new Date().toISOString()+' · '+act.length+' active band'+(act.length===1?'':'s')+(all.length>act.length?(' · '+(all.length-act.length)+' bypassed omitted'):''));
-    L.push('// Same RBJ biquad cascade + per-band frequency-selective dynamics as the app.');
+    L.push('// Generated '+new Date().toISOString()+' · '+act.length+' active band'+(act.length===1?'':'s')+(all.length>act.length?(' · '+(all.length-act.length)+' bypassed/muted omitted'):''));
+    L.push('// Same RBJ cascade as the app: Butterworth-staggered slopes on cuts, +/-g/2 two-shelf tilt,');
+    L.push('// depth-limited notch (bell) when dynamic or gain-authored, per-band frequency-selective dynamics.');
     L.push('// (App detects at block rate over a ~46 ms RMS window; here the window matches but GR updates per sample.)');
     L.push('import("stdfaust.lib");');
     L.push('');
@@ -853,14 +907,14 @@ class Component extends DCLogic {
     L.push('  det = (l + r)*0.5;');
     act.forEach((b,k)=>{
       const i=k+1, p='bd'+i, G='v:['+i+']B'+i+' '+(b.type||'bell').toUpperCase()+'/';
-      const hasG=!gainless(b.type), dyn=!!(hasG&&b.dyn&&b.dyn.on);
+      const hasG=!gainless(b), dyn=!!(hasG&&b.dyn&&b.dyn.on);
       L.push('');
-      L.push('  // band '+i+': '+b.type+(dyn?(' + dynamics ('+b.dyn.mode+')'):'')+(b.type==='tilt'?' (renders as high-shelf, app parity)':''));
+      L.push('  // band '+i+': '+b.type+((b.type==='low-cut'||b.type==='high-cut')?(' '+(b.slopeDbOct||12)+' dB/oct'):'')+(dyn?(' + dynamics ('+b.dyn.mode+')'):'')+(b.type==='notch'&&hasG?' (depth notch = bell)':''));
       L.push('  '+p+'_freq = hslider("'+G+'[0]FREQ [unit:Hz][scale:log]", '+n(b.freqHz)+', 20.0, 20000.0, 0.1);');
       L.push('  '+p+'_q = hslider("'+G+'[1]Q", '+n(b.q)+', 0.3, 30.0, 0.01);');
       if(hasG)L.push('  '+p+'_gain = hslider("'+G+'[2]GAIN [unit:dB]", '+n(b.gainDb)+', -18.0, 18.0, 0.1);');
       if(dyn){
-        L.push('  '+p+'_range = hslider("'+G+'[3]RANGE [unit:dB]", '+n(b.dyn.rangeDb)+', -18.0, 18.0, 0.1);');
+        L.push('  '+p+'_range = hslider("'+G+'[3]RANGE [unit:dB]", '+n(Math.abs(b.dyn.rangeDb))+', 0.0, 18.0, 0.1);');
         L.push('  '+p+'_thresh = hslider("'+G+'[4]THRESH [unit:dB]", '+n(b.dyn.threshDb)+', -60.0, 0.0, 0.5);');
         L.push('  '+p+'_ratio = hslider("'+G+'[5]RATIO", '+n(b.dyn.ratio)+', 1.0, 20.0, 0.1);');
         L.push('  '+p+'_att = hslider("'+G+'[6]ATK [unit:ms]", '+n(b.dyn.attackMs)+', 0.5, 500.0, 0.5);');
@@ -869,8 +923,8 @@ class Component extends DCLogic {
         L.push('  '+p+'_da0 = 1.0 + '+p+'_dal;');
         L.push('  '+p+'_bp = fi.tf22t('+p+'_dal/'+p+'_da0, 0.0, (0.0 - '+p+'_dal)/'+p+'_da0, (0.0 - 2.0*'+p+'_cw)/'+p+'_da0, (1.0 - '+p+'_dal)/'+p+'_da0);');
         L.push('  '+p+'_lvldb = ba.linear2db(max(0.000001, det : '+p+'_bp : an.rms_envelope_rect(0.046)));');
-        L.push('  '+p+'_dir = select2(('+p+'_range < 0.0) | '+(b.dyn.mode==='down'?1:0)+', 1.0, 0.0 - 1.0);');
-        L.push('  '+p+'_tgt = min(max(0.0, '+p+'_lvldb - '+p+'_thresh)*(1.0 - 1.0/max(1.0, '+p+'_ratio)), abs('+p+'_range))*'+p+'_dir;');
+        L.push('  '+p+'_dir = '+(b.dyn.mode==='up'?'1.0':'0.0 - 1.0')+'; // mode is the only direction source');
+        L.push('  '+p+'_tgt = min(max(0.0, '+p+'_lvldb - '+p+'_thresh)*(1.0 - 1.0/max(1.0, '+p+'_ratio)), '+p+'_range)*'+p+'_dir;');
         L.push('  '+p+'_catt = 1.0 - exp(0.0 - 1.0/(ma.SR*max(0.0005, '+p+'_att/1000.0)));');
         L.push('  '+p+'_crel = 1.0 - exp(0.0 - 1.0/(ma.SR*max(0.0005, '+p+'_rel/1000.0)));');
         L.push('  '+p+'_smooth(x) = fb ~ _ with { fb(y) = y + (x - y)*select2(x < y, '+p+'_crel, '+p+'_catt); };');
@@ -878,44 +932,61 @@ class Component extends DCLogic {
       }
       L.push('  '+p+'_w = 2.0*ma.PI*max(10.0, min(ma.SR*0.49, '+p+'_freq))/ma.SR;');
       L.push('  '+p+'_cw = cos('+p+'_w); '+p+'_sw = sin('+p+'_w);');
-      L.push('  '+p+'_al = '+p+'_sw/(2.0*max(0.1, '+p+'_q));');
-      if(hasG){
-        L.push('  '+p+'_geff = '+p+'_gain'+(dyn?(' + '+p+'_gr'):'')+';');
-        L.push('  '+p+'_A = pow(10.0, '+p+'_geff/40.0);');
+      if(hasG)L.push('  '+p+'_geff = '+p+'_gain'+(dyn?(' + '+p+'_gr'):'')+';');
+      // section list mirrors _eqSections: staggered cuts / two-shelf tilt / depth notch / single biquad
+      const secs=[];
+      if(b.type==='low-cut'||b.type==='high-cut'){
+        const N=Math.max(1,Math.round((b.slopeDbOct||12)/12));
+        for(let sk=1;sk<=N;sk++){ const KQ=1/(2*Math.sin((2*sk-1)*Math.PI/(4*N))); secs.push({sk,type:b.type,gE:null,qE:'('+n(KQ)+'*('+p+'_q/0.70710678))'}); }
+      } else if(b.type==='tilt'){
+        secs.push({sk:1,type:'low-shelf',gE:'(0.0 - '+p+'_geff)/2.0',qE:p+'_q'});
+        secs.push({sk:2,type:'high-shelf',gE:p+'_geff/2.0',qE:p+'_q'});
+      } else if(!hasG){
+        secs.push({sk:1,type:b.type,gE:null,qE:p+'_q'});
+      } else {
+        secs.push({sk:1,type:(b.type==='notch')?'bell':b.type,gE:p+'_geff',qE:p+'_q'});
       }
-      switch(b.type){
-        case 'low-cut':
-          L.push('  '+p+'_cb0 = (1.0 + '+p+'_cw)/2.0; '+p+'_cb1 = 0.0 - (1.0 + '+p+'_cw); '+p+'_cb2 = (1.0 + '+p+'_cw)/2.0;');
-          L.push('  '+p+'_ca0 = 1.0 + '+p+'_al; '+p+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+p+'_ca2 = 1.0 - '+p+'_al;');
-          break;
-        case 'high-cut':
-          L.push('  '+p+'_cb0 = (1.0 - '+p+'_cw)/2.0; '+p+'_cb1 = 1.0 - '+p+'_cw; '+p+'_cb2 = (1.0 - '+p+'_cw)/2.0;');
-          L.push('  '+p+'_ca0 = 1.0 + '+p+'_al; '+p+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+p+'_ca2 = 1.0 - '+p+'_al;');
-          break;
-        case 'notch':
-          L.push('  '+p+'_cb0 = 1.0; '+p+'_cb1 = 0.0 - 2.0*'+p+'_cw; '+p+'_cb2 = 1.0;');
-          L.push('  '+p+'_ca0 = 1.0 + '+p+'_al; '+p+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+p+'_ca2 = 1.0 - '+p+'_al;');
-          break;
-        case 'band-pass':
-          L.push('  '+p+'_cb0 = '+p+'_al; '+p+'_cb1 = 0.0; '+p+'_cb2 = 0.0 - '+p+'_al;');
-          L.push('  '+p+'_ca0 = 1.0 + '+p+'_al; '+p+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+p+'_ca2 = 1.0 - '+p+'_al;');
-          break;
-        case 'low-shelf':
-          L.push('  '+p+'_s = 2.0*sqrt('+p+'_A)*'+p+'_al;');
-          L.push('  '+p+'_cb0 = '+p+'_A*(('+p+'_A + 1.0) - ('+p+'_A - 1.0)*'+p+'_cw + '+p+'_s); '+p+'_cb1 = 2.0*'+p+'_A*(('+p+'_A - 1.0) - ('+p+'_A + 1.0)*'+p+'_cw); '+p+'_cb2 = '+p+'_A*(('+p+'_A + 1.0) - ('+p+'_A - 1.0)*'+p+'_cw - '+p+'_s);');
-          L.push('  '+p+'_ca0 = ('+p+'_A + 1.0) + ('+p+'_A - 1.0)*'+p+'_cw + '+p+'_s; '+p+'_ca1 = 0.0 - 2.0*(('+p+'_A - 1.0) + ('+p+'_A + 1.0)*'+p+'_cw); '+p+'_ca2 = ('+p+'_A + 1.0) + ('+p+'_A - 1.0)*'+p+'_cw - '+p+'_s;');
-          break;
-        case 'high-shelf': case 'tilt':
-          L.push('  '+p+'_s = 2.0*sqrt('+p+'_A)*'+p+'_al;');
-          L.push('  '+p+'_cb0 = '+p+'_A*(('+p+'_A + 1.0) + ('+p+'_A - 1.0)*'+p+'_cw + '+p+'_s); '+p+'_cb1 = 0.0 - 2.0*'+p+'_A*(('+p+'_A - 1.0) + ('+p+'_A + 1.0)*'+p+'_cw); '+p+'_cb2 = '+p+'_A*(('+p+'_A + 1.0) + ('+p+'_A - 1.0)*'+p+'_cw - '+p+'_s);');
-          L.push('  '+p+'_ca0 = ('+p+'_A + 1.0) - ('+p+'_A - 1.0)*'+p+'_cw + '+p+'_s; '+p+'_ca1 = 2.0*(('+p+'_A - 1.0) - ('+p+'_A + 1.0)*'+p+'_cw); '+p+'_ca2 = ('+p+'_A + 1.0) - ('+p+'_A - 1.0)*'+p+'_cw - '+p+'_s;');
-          break;
-        default:
-          L.push('  '+p+'_cb0 = 1.0 + '+p+'_al*'+p+'_A; '+p+'_cb1 = 0.0 - 2.0*'+p+'_cw; '+p+'_cb2 = 1.0 - '+p+'_al*'+p+'_A;');
-          L.push('  '+p+'_ca0 = 1.0 + '+p+'_al/'+p+'_A; '+p+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+p+'_ca2 = 1.0 - '+p+'_al/'+p+'_A;');
-          break;
-      }
-      L.push('  '+p+'_flt = fi.tf22t('+p+'_cb0/'+p+'_ca0, '+p+'_cb1/'+p+'_ca0, '+p+'_cb2/'+p+'_ca0, '+p+'_ca1/'+p+'_ca0, '+p+'_ca2/'+p+'_ca0);');
+      const fltParts=[];
+      secs.forEach(sc=>{
+        const s=p+'s'+sc.sk;
+        L.push('  '+s+'_al = '+p+'_sw/(2.0*max(0.1, '+sc.qE+'));');
+        if(sc.gE!==null)L.push('  '+s+'_A = pow(10.0, ('+sc.gE+')/40.0);');
+        switch(sc.type){
+          case 'low-cut':
+            L.push('  '+s+'_cb0 = (1.0 + '+p+'_cw)/2.0; '+s+'_cb1 = 0.0 - (1.0 + '+p+'_cw); '+s+'_cb2 = (1.0 + '+p+'_cw)/2.0;');
+            L.push('  '+s+'_ca0 = 1.0 + '+s+'_al; '+s+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+s+'_ca2 = 1.0 - '+s+'_al;');
+            break;
+          case 'high-cut':
+            L.push('  '+s+'_cb0 = (1.0 - '+p+'_cw)/2.0; '+s+'_cb1 = 1.0 - '+p+'_cw; '+s+'_cb2 = (1.0 - '+p+'_cw)/2.0;');
+            L.push('  '+s+'_ca0 = 1.0 + '+s+'_al; '+s+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+s+'_ca2 = 1.0 - '+s+'_al;');
+            break;
+          case 'notch':
+            L.push('  '+s+'_cb0 = 1.0; '+s+'_cb1 = 0.0 - 2.0*'+p+'_cw; '+s+'_cb2 = 1.0;');
+            L.push('  '+s+'_ca0 = 1.0 + '+s+'_al; '+s+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+s+'_ca2 = 1.0 - '+s+'_al;');
+            break;
+          case 'band-pass':
+            L.push('  '+s+'_cb0 = '+s+'_al; '+s+'_cb1 = 0.0; '+s+'_cb2 = 0.0 - '+s+'_al;');
+            L.push('  '+s+'_ca0 = 1.0 + '+s+'_al; '+s+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+s+'_ca2 = 1.0 - '+s+'_al;');
+            break;
+          case 'low-shelf':
+            L.push('  '+s+'_s = 2.0*sqrt('+s+'_A)*'+s+'_al;');
+            L.push('  '+s+'_cb0 = '+s+'_A*(('+s+'_A + 1.0) - ('+s+'_A - 1.0)*'+p+'_cw + '+s+'_s); '+s+'_cb1 = 2.0*'+s+'_A*(('+s+'_A - 1.0) - ('+s+'_A + 1.0)*'+p+'_cw); '+s+'_cb2 = '+s+'_A*(('+s+'_A + 1.0) - ('+s+'_A - 1.0)*'+p+'_cw - '+s+'_s);');
+            L.push('  '+s+'_ca0 = ('+s+'_A + 1.0) + ('+s+'_A - 1.0)*'+p+'_cw + '+s+'_s; '+s+'_ca1 = 0.0 - 2.0*(('+s+'_A - 1.0) + ('+s+'_A + 1.0)*'+p+'_cw); '+s+'_ca2 = ('+s+'_A + 1.0) + ('+s+'_A - 1.0)*'+p+'_cw - '+s+'_s;');
+            break;
+          case 'high-shelf':
+            L.push('  '+s+'_s = 2.0*sqrt('+s+'_A)*'+s+'_al;');
+            L.push('  '+s+'_cb0 = '+s+'_A*(('+s+'_A + 1.0) + ('+s+'_A - 1.0)*'+p+'_cw + '+s+'_s); '+s+'_cb1 = 0.0 - 2.0*'+s+'_A*(('+s+'_A - 1.0) + ('+s+'_A + 1.0)*'+p+'_cw); '+s+'_cb2 = '+s+'_A*(('+s+'_A + 1.0) + ('+s+'_A - 1.0)*'+p+'_cw - '+s+'_s);');
+            L.push('  '+s+'_ca0 = ('+s+'_A + 1.0) - ('+s+'_A - 1.0)*'+p+'_cw + '+s+'_s; '+s+'_ca1 = 2.0*(('+s+'_A - 1.0) - ('+s+'_A + 1.0)*'+p+'_cw); '+s+'_ca2 = ('+s+'_A + 1.0) - ('+s+'_A - 1.0)*'+p+'_cw - '+s+'_s;');
+            break;
+          default:
+            L.push('  '+s+'_cb0 = 1.0 + '+s+'_al*'+s+'_A; '+s+'_cb1 = 0.0 - 2.0*'+p+'_cw; '+s+'_cb2 = 1.0 - '+s+'_al*'+s+'_A;');
+            L.push('  '+s+'_ca0 = 1.0 + '+s+'_al/'+s+'_A; '+s+'_ca1 = 0.0 - 2.0*'+p+'_cw; '+s+'_ca2 = 1.0 - '+s+'_al/'+s+'_A;');
+            break;
+        }
+        L.push('  '+s+'_flt = fi.tf22t('+s+'_cb0/'+s+'_ca0, '+s+'_cb1/'+s+'_ca0, '+s+'_cb2/'+s+'_ca0, '+s+'_ca1/'+s+'_ca0, '+s+'_ca2/'+s+'_ca0);');
+        fltParts.push(s+'_flt');
+      });
+      L.push('  '+p+'_flt = '+fltParts.join(' : ')+';');
       chain.push(p+'_flt');
     });
     L.push('');
@@ -1108,7 +1179,7 @@ class Component extends DCLogic {
     let eqChips=[],eqDynChips=[];
     if(eqSelBand){
       eqChips=[ {label:'FREQ',val:Math.round(eqSelBand.freqHz)+'',down:null}, _chip('GAIN',eqSelBand.gainDb.toFixed(1),'band','gainDb',-18,18,0.1), _chip('Q',eqSelBand.q.toFixed(2),'band','q',0.3,30,0.01) ];
-      eqDynChips=[ _chip('RANGE',eqSelBand.dyn.rangeDb.toFixed(1),'dyn','rangeDb',-18,18,0.1), _chip('THRESH',eqSelBand.dyn.threshDb.toFixed(0),'dyn','threshDb',-60,0,0.5), _chip('RATIO',eqSelBand.dyn.ratio.toFixed(1),'dyn','ratio',1,20,0.1), _chip('ATK',eqSelBand.dyn.attackMs.toFixed(0),'dyn','attackMs',0.5,500,0.5), _chip('REL',eqSelBand.dyn.releaseMs.toFixed(0),'dyn','releaseMs',5,5000,5) ];
+      eqDynChips=[ _chip('RANGE',eqSelBand.dyn.rangeDb.toFixed(1),'dyn','rangeDb',0,18,0.1), _chip('THRESH',eqSelBand.dyn.threshDb.toFixed(0),'dyn','threshDb',-60,0,0.5), _chip('RATIO',eqSelBand.dyn.ratio.toFixed(1),'dyn','ratio',1,20,0.1), _chip('ATK',eqSelBand.dyn.attackMs.toFixed(0),'dyn','attackMs',0.5,500,0.5), _chip('REL',eqSelBand.dyn.releaseMs.toFixed(0),'dyn','releaseMs',5,5000,5) ];
     }
     const eqGlobChips=[ _chip('MIX',(P.eqMix*100).toFixed(0)+'%','P','eqMix',0,1,0.001), _chip('OUT',P.eqOut.toFixed(1),'P','eqOut',-24,24,0.1) ];
     const eqChipStyle={display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'ns-resize',userSelect:'none',touchAction:'none',minWidth:'52px',padding:'3px 6px',borderRadius:'4px',background:'rgba(0,0,0,.13)'};
