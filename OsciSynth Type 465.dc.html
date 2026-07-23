@@ -527,6 +527,7 @@ class Component extends DCLogic {
     this.P.eqMix=1; this.P.eqOut=0;
     this.EQ_TYPES=['bell','low-shelf','high-shelf','low-cut','high-cut','notch','band-pass','tilt'];
     this.EQ_MAX_MID=12; // locked: 12 free bands + the 2 fixed end slots
+    this._eqIdSeq=0; // stable band ids — the worklet merge protocol + host automation identity ride on these
     this.eqBands=this._eqDefaultBands(); this.eqSel=0;
     this.MODES=[['scope','SCOPE'],['wave','WAVE'],['mod','MOD'],['spectro','SPECTRO'],['analyzer','ANALYZER']];
     this.SYNCABLE={ fmRate:{s:'fmSync',d:'fmDivision',l:'FM DIV'}, lfoRate:{s:'lfoSync',d:'lfoDivision',l:'LFO DIV'}, morph:{s:'morphSync',d:'morphDivision',l:'MORPH ÷'}, rotX:{s:'rotXSync',d:'rotXDivision',l:'ROT X ÷'}, rotY:{s:'rotYSync',d:'rotYDivision',l:'ROT Y ÷'}, rotZ:{s:'rotZSync',d:'rotZDivision',l:'ROT Z ÷'} };
@@ -570,13 +571,19 @@ class Component extends DCLogic {
   mtof(n){return 440*Math.pow(2,(n-69)/12);}
   meterDot(i,lv){ const on=lv*10>=i+0.5, c=this.DOTCOLS[i<5?0:i<8?1:2]; return {bg:on?c[0]:'#8f8a77', sh:on?c[1]:'inset 0 1px 1px rgba(0,0,0,.3)'}; }
   noteOn(note,vel,fromMidi){
-    if(!this.running&&!fromMidi)this.power(true);
+    if(!this.running&&!fromMidi){ this.power(true).then(()=>this.noteOn(note,vel,true)); return; }
+    if(this._wk()){
+      if(this.state.drone)this.setDrone(false);
+      this._pushPatch(true); // params-before-note invariant: a note may never outrun the patch that caused it
+      this._postWk({t:'note',on:true,n:note,v:vel});
+      return;
+    }
     this.core.drone=!!(this.state.drone&&this.running);
     this.core.noteOn(note,vel);
     if(this.core.notes.droneOff){ this.core.notes.droneOff=false; this.setDrone(false); }
   }
-  noteOff(note){ this.core.noteOff(note); }
-  allNotesOff(){ this.core.allNotesOff(); }
+  noteOff(note){ if(this._wk()){ this._postWk({t:'note',on:false,n:note}); return; } this.core.noteOff(note); }
+  allNotesOff(){ if(this._wk())this._postWk({t:'panic'}); this.core.allNotesOff(); }
   readVar(d,p){let v=0,b;do{b=d.getUint8(p.i++);v=(v<<7)|(b&0x7f);}while(b&0x80);return v;}
   parseMidi(buf){
     const d=new DataView(buf);
@@ -618,8 +625,11 @@ class Component extends DCLogic {
     return {events:evs,dur:time,bpm:firstTempo?60000000/firstTempo:120};
   }
   fmtTime(s){s=Math.max(0,s);return (s/60|0)+':'+String(s%60|0).padStart(2,'0');}
-  seekTo(t){ this.core.seekTo(t); }
-  setPlaying(on){ this.core.setPlaying(on); this.core.notes.playingChanged=false; this.setState({playing:this.core.midiPlaying}); }
+  seekTo(t){ if(this._wk()){ this._postWk({t:'seek',time:t}); this.core.songTime=t; return; } this.core.seekTo(t); }
+  setPlaying(on){
+    if(this._wk()){ this._pushPatch(true); this._postWk({t:'play',on:!!on}); this.core.midiPlaying=!!on&&this.core.midiEvents.length>0; this.setState({playing:this.core.midiPlaying}); return; }
+    this.core.setPlaying(on); this.core.notes.playingChanged=false; this.setState({playing:this.core.midiPlaying});
+  }
   process(e){
     const c=this.core; c.sampleRate=this.ctx.sampleRate;
     c.gen=this.state.gen; c.bpm=this.state.bpm||120; c.loop=!!this.state.loop; c.drone=!!(this.state.drone&&this.running); c.eqPre=(this.state.eqTap==='pre'); c.midiBpm=this.midiBpm||120;
@@ -630,19 +640,144 @@ class Component extends DCLogic {
     if(nt.droneOff){ nt.droneOff=false; this.setDrone(false); }
     if(nt.playingChanged){ nt.playingChanged=false; this.setState({playing:c.midiPlaying}); }
   }
+  /* --- Phase 1 W2/W3: AudioWorklet host (default) + ScriptProcessor fallback ------------------
+   * The worklet module is assembled at runtime from SynthCore's own source (single-file app, works
+   * from file:// via a blob URL). Protocol: ordered port messages — patch (throttled, latest-wins,
+   * ALWAYS flushed before a note/transport message), note, midi, play, seek, panic, pool (returned
+   * beam buffers). Worklet -> main: 256-sample transferable beam chunks + a telemetry array
+   * (meters, transport, phases, voices, per-band GR/eased params) written into the LOCAL core
+   * mirror so every existing UI read keeps working unchanged. Backpressure: if the buffer pool is
+   * dry (stalled UI), the worklet DROPS beam chunks — audio never waits, never allocates. */
+  _workletModuleSrc(){
+    return SynthCore.toString()+"\n"+
+"registerProcessor('osci-core', class extends AudioWorkletProcessor{\n"+
+"  constructor(){ super();\n"+
+"    this.core=new SynthCore(); this.core.sampleRate=sampleRate; this.armed=false;\n"+
+"    this.pool=[]; for(let i=0;i<8;i++)this.pool.push({x:new Float32Array(256),y:new Float32Array(256)});\n"+
+"    this.cur=null; this.fill=0; this.tele=new Float32Array(14+4*11+5*14);\n"+
+"    this.port.onmessage=(e)=>this.onMsg(e.data);\n"+
+"  }\n"+
+"  onMsg(d){ const c=this.core;\n"+
+"    if(d.t==='patch'){ const p=d.p;\n"+
+"      if(p.P)Object.assign(c.P,p.P);\n"+
+"      if(p.FM_DIVS)c.FM_DIVS=p.FM_DIVS;\n"+
+"      if(p.eqPre!==undefined&&p.eqPre!==c.eqPre){ c.eqPre=p.eqPre; for(const bd of c.eqBands){ bd._zs=null; bd._topo=null; bd._fS=undefined; } }\n"+
+"      if(p.bands)this.mergeBands(p.bands);\n"+
+"      if(p.gen!==undefined)c.gen=p.gen; if(p.bpm!==undefined)c.bpm=p.bpm; if(p.loop!==undefined)c.loop=p.loop;\n"+
+"      if(p.drone!==undefined)c.drone=p.drone; if(p.midiBpm!==undefined)c.midiBpm=p.midiBpm;\n"+
+"      this.armed=true;\n"+
+"    }\n"+
+"    else if(d.t==='note'){ if(d.on)c.noteOn(d.n,d.v); else c.noteOff(d.n); }\n"+
+"    else if(d.t==='panic')c.allNotesOff();\n"+
+"    else if(d.t==='midi'){ c.midiEvents=d.events||[]; c.midiDur=d.dur||0; c.midiPlaying=false; c.seekTo(0); }\n"+
+"    else if(d.t==='play'){ c.setPlaying(!!d.on); c.notes.playingChanged=false; }\n"+
+"    else if(d.t==='seek')c.seekTo(d.time||0);\n"+
+"    else if(d.t==='pool')this.pool.push({x:d.x,y:d.y});\n"+
+"  }\n"+
+"  mergeBands(list){ // stable-id merge: surviving bands keep runtime state (_acc/_gr/_zs/eased)\n"+
+"    const c=this.core, byId={}; for(const b of c.eqBands)if(b.id!==undefined)byId[b.id]=b;\n"+
+"    const next=[];\n"+
+"    for(const nb of list){ const ex=byId[nb.id];\n"+
+"      if(ex){ ex.type=nb.type; ex.freqHz=nb.freqHz; ex.gainDb=nb.gainDb; ex.q=nb.q; ex.on=nb.on; ex.slopeDbOct=nb.slopeDbOct; ex.muted=nb.muted; ex.soloed=nb.soloed; ex.end=nb.end; ex.dyn=Object.assign(ex.dyn||{},nb.dyn); next.push(ex); }\n"+
+"      else next.push(nb);\n"+
+"    }\n"+
+"    c.eqBands=next;\n"+
+"  }\n"+
+"  snap(){ const c=this.core,t=this.tele;\n"+
+"    t[0]=c.outPeak; t[1]=c.outSq; t[2]=c.outSqN; c.outPeak=0; c.outSq=0; c.outSqN=0;\n"+
+"    t[3]=c.songTime; t[4]=c.midiPlaying?1:0;\n"+
+"    t[5]=c.notes.droneOff?1:0; t[6]=c.notes.playingChanged?1:0; c.notes.droneOff=false; c.notes.playingChanged=false;\n"+
+"    t[7]=(c._mEff===undefined)?-1:c._mEff; t[8]=c.fmPh; t[9]=c.lfoPh; t[10]=c.morphPh; t[11]=c.ax; t[12]=c.ay; t[13]=c.az;\n"+
+"    let o=14;\n"+
+"    for(let i=0;i<11;i++){ const v=c.voices[i]; t[o++]=v?v.note:-1; t[o++]=v?v.env:0; t[o++]=(v&&v.gate)?1:0; t[o++]=v?v.vel:0; }\n"+
+"    for(let i=0;i<14;i++){ const b=c.eqBands[i]; if(b){ t[o++]=b._gr||0; t[o++]=(b._geff!==undefined)?b._geff:b.gainDb; t[o++]=(b._fS!==undefined)?b._fS:-1; t[o++]=b._gS||0; t[o++]=b._qS||0; } else { t[o++]=0;t[o++]=0;t[o++]=-1;t[o++]=0;t[o++]=0; } }\n"+
+"  }\n"+
+"  process(inputs,outputs){\n"+
+"    const out=outputs[0]; if(!out||out.length<2)return true;\n"+
+"    const L=out[0],R=out[1],n=L.length;\n"+
+"    if(!this.armed)return true;\n"+
+"    const c=this.core;\n"+
+"    c.render(L,R,n);\n"+
+"    for(let i=0;i<n;i++){\n"+
+"      if(!this.cur){ if(this.pool.length){ this.cur=this.pool.pop(); this.fill=0; } else break; }\n"+
+"      this.cur.x[this.fill]=c.beamX[i]; this.cur.y[this.fill]=c.beamY[i];\n"+
+"      if(++this.fill===256){ this.snap(); const m=this.cur; this.cur=null; this.port.postMessage({t:'beam',x:m.x,y:m.y,tele:this.tele},[m.x.buffer,m.y.buffer]); }\n"+
+"    }\n"+
+"    return true;\n"+
+"  }\n"+
+"});";
+  }
+  _postWk(m,tr){ if(this.wnode){ try{ this.wnode.port.postMessage(m,tr||[]); }catch(e){} } }
+  _wk(){ return !!(this.wnode&&this._usingWorklet&&!this._workletDead); }
+  _patchBody(){
+    const P={}; this._paramIds().forEach(id=>{ P[id]=this.P[id]; });
+    return { P, bands:this._eqPersist(this.eqBands), gen:this.state.gen, bpm:this.state.bpm||120, loop:!!this.state.loop, drone:!!(this.state.drone&&this.running), eqPre:(this.state.eqTap==='pre'), midiBpm:this.midiBpm||120 };
+  }
+  _pushPatch(force){
+    if(!this._wk())return;
+    const p=this._patchBody(); const sig=JSON.stringify(p);
+    if(!force&&sig===this._patchSig)return;
+    this._patchSig=sig; p.FM_DIVS=this.FM_DIVS;
+    this._postWk({t:'patch',p});
+  }
+  _sendMidiToWorklet(){ if(this._wk()&&this.core.midiEvents.length)this._postWk({t:'midi',events:this.core.midiEvents,dur:this.core.midiDur}); }
+  _onWorkletMsg(d){
+    if(d.t!=='beam')return;
+    const x=d.x,y=d.y,t=d.tele,c=this.core;
+    for(let i=0;i<x.length;i++){ this.ringX[this.rw]=x[i]; this.ringY[this.rw]=y[i]; this.rw=(this.rw+1)&this.RM; }
+    this._postWk({t:'pool',x,y},[x.buffer,y.buffer]);
+    c.outPeak=Math.max(c.outPeak,t[0]); c.outSq+=t[1]; c.outSqN+=t[2];
+    c.songTime=t[3]; c.midiPlaying=t[4]>0.5;
+    if(t[5]>0.5)this.setDrone(false);
+    if(t[6]>0.5)this.setState({playing:c.midiPlaying});
+    c._mEff=(t[7]<0)?undefined:t[7]; c.fmPh=t[8]; c.lfoPh=t[9]; c.morphPh=t[10]; c.ax=t[11]; c.ay=t[12]; c.az=t[13];
+    let o=14;
+    for(let i=0;i<11;i++){ const v=c.voices[i]; v.note=t[o++]; v.env=t[o++]; v.gate=t[o++]>0.5; v.vel=t[o++]; }
+    for(let i=0;i<14;i++){ if(i<this.eqBands.length){ const b=this.eqBands[i]; b._gr=t[o]; b._geff=t[o+1]; const fS=t[o+2]; if(fS>0){ b._fS=fS; b._gS=t[o+3]; b._qS=t[o+4]; } } o+=5; }
+  }
+  async _startWorklet(){
+    if(this._forceSPN||this._workletDead||!this.ctx.audioWorklet||typeof AudioWorkletNode==='undefined')return false;
+    try{
+      if(!this._wkModuleAdded){
+        const url=URL.createObjectURL(new Blob([this._workletModuleSrc()],{type:'text/javascript'}));
+        await this.ctx.audioWorklet.addModule(url); URL.revokeObjectURL(url); this._wkModuleAdded=true;
+      }
+      if(!this.wnode){
+        this.wnode=new AudioWorkletNode(this.ctx,'osci-core',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2]});
+        this.wnode.port.onmessage=e=>this._onWorkletMsg(e.data);
+        this.wnode.onprocessorerror=()=>{ // a thrown processor is permanent silence: fall back
+          console.warn('OsciSynth: worklet processor error — falling back to ScriptProcessor');
+          try{ this.wnode.disconnect(); }catch(e){}
+          this.wnode=null; this._workletDead=true; this._usingWorklet=false;
+          if(this.running){ this.power(false).then(()=>this.power(true)); }
+        };
+      }
+      this._patchSig='';
+      this.wnode.connect(this.analyser);
+      return true;
+    }catch(err){
+      console.warn('OsciSynth: AudioWorklet unavailable — using the ScriptProcessor fallback:', err);
+      this._workletDead=true; return false;
+    }
+  }
   async power(on){
     if(on){
       if(!this.ctx)this.ctx=new (window.AudioContext||window.webkitAudioContext)();
       await this.ctx.resume();
-      if(!this.node){this.node=this.ctx.createScriptProcessor(2048,0,2);this.node.onaudioprocess=e=>this.process(e);}
       if(!this.analyser){ this.analyser=this.ctx.createAnalyser(); this.analyser.fftSize=4096; this.analyser.smoothingTimeConstant=0.8; this.analyser.connect(this.ctx.destination); this._freqData=new Float32Array(this.analyser.frequencyBinCount); }
-      this.node.connect(this.analyser);
+      this._usingWorklet=await this._startWorklet();
+      if(!this._usingWorklet){
+        if(!this.node){ this.node=this.ctx.createScriptProcessor(2048,0,2); this.node.onaudioprocess=e=>this.process(e); }
+        this.node.connect(this.analyser);
+      }
       this.running=true;
+      if(this._usingWorklet){ this._pushPatch(true); this._sendMidiToWorklet(); }
     }else{
       if(this.node)this.node.disconnect();
+      if(this.wnode){ try{ this.wnode.disconnect(); }catch(e){} this._postWk({t:'panic'}); }
       this.setPlaying(false); this.allNotesOff();
       if(this.ctx)await this.ctx.suspend();
-      this.running=false;
+      this.running=false; this._usingWorklet=false;
     }
     this.setState({power:this.running});
   }
@@ -793,6 +928,7 @@ class Component extends DCLogic {
     const P=this.P,TAU=this.TAU,bctx=cv.getContext('2d'),W=cv.width,H=cv.height,DPR=this.DPR||1;
     this._fAcc=(this._fAcc||0)+(now-(this._lastT||now)); this._fCnt=(this._fCnt||0)+1; this._lastT=now;
     if(this._fCnt>=30){ if(this._refs.fpsRef)this._refs.fpsRef.textContent=(1000/(this._fAcc/this._fCnt)).toFixed(0)+' FPS'; this._fAcc=0;this._fCnt=0; }
+    if(this._usingWorklet&&this.running)this._pushPatch(false); // latest-wins patch sync, once per RAF
     this.meterVal=Math.max(this.core.outPeak,this.meterVal*0.88); this.core.outPeak=0;
     { const rmsNow=this.core.outSqN?Math.sqrt(this.core.outSq/this.core.outSqN):0; this.meterRms=Math.max(rmsNow,(this.meterRms||0)*0.92); this.core.outSq=0; this.core.outSqN=0;
       const pct=v=>{ const db=20*Math.log10(Math.max(1e-4,v)); return Math.max(0,Math.min(100,(db+60)/60*100)).toFixed(1)+'%'; };
@@ -861,7 +997,7 @@ class Component extends DCLogic {
   // --- Phase 0: parameter model + history ------------------------------------
   _pmeta(id){ if(id==='master')return {min:0,max:1,step:0.001}; if(id==='eqMix')return {min:0,max:1,step:0.001}; if(id==='eqOut')return {min:-24,max:24,step:0.1}; const c=this.CTLS.find(x=>x[1]===id); return c?{min:c[3],max:c[4],step:c[5]}:null; }
   _paramIds(){ return this.CTLS.map(c=>c[1]).concat('master','fmSync','fmDivision','eqMix','eqOut','lfoSync','lfoDivision','morphSync','morphDivision','rotXSync','rotXDivision','rotYSync','rotYDivision','rotZSync','rotZDivision'); }
-  _eqPersist(bands){ return (bands||[]).map(b=>({type:b.type,freqHz:b.freqHz,gainDb:b.gainDb,q:b.q,on:b.on,slopeDbOct:b.slopeDbOct||12,muted:!!b.muted,soloed:!!b.soloed,end:b.end||undefined,dyn:{on:!!(b.dyn&&b.dyn.on),mode:(b.dyn&&b.dyn.mode)||'down',threshDb:b.dyn?b.dyn.threshDb:-24,ratio:b.dyn?b.dyn.ratio:2,rangeDb:b.dyn?b.dyn.rangeDb:0,attackMs:b.dyn?b.dyn.attackMs:10,releaseMs:b.dyn?b.dyn.releaseMs:120}})); }
+  _eqPersist(bands){ return (bands||[]).map(b=>({id:b.id,type:b.type,freqHz:b.freqHz,gainDb:b.gainDb,q:b.q,on:b.on,slopeDbOct:b.slopeDbOct||12,muted:!!b.muted,soloed:!!b.soloed,end:b.end||undefined,dyn:{on:!!(b.dyn&&b.dyn.on),mode:(b.dyn&&b.dyn.mode)||'down',threshDb:b.dyn?b.dyn.threshDb:-24,ratio:b.dyn?b.dyn.ratio:2,rangeDb:b.dyn?b.dyn.rangeDb:0,attackMs:b.dyn?b.dyn.attackMs:10,releaseMs:b.dyn?b.dyn.releaseMs:120}})); }
   snapshot(){ const p={}; this._paramIds().forEach(id=>{ p[id]=this.P[id]; }); return {params:p, gen:this.state.gen, eqBands:this._eqPersist(this.eqBands), eqSel:this.eqSel}; }
   applySnapshot(s){ if(!s)return; this._mutTok++; if(s.params)this._paramIds().forEach(id=>{ if(s.params[id]!==undefined)this.P[id]=s.params[id]; }); if(s.eqBands){ this.eqBands=this._eqPersist(s.eqBands); this.core.eqBands=this.eqBands; } this.eqSel=Math.max(0,Math.min(s.eqSel!==undefined?s.eqSel:this.eqSel,Math.max(0,this.eqBands.length-1))); this.setState(s.gen?{gen:s.gen}:{}); }
   pushUndo(before){ this.undoStack.push(before); if(this.undoStack.length>this.UNDO_MAX)this.undoStack.shift(); this.redoStack.length=0; }
@@ -927,7 +1063,9 @@ class Component extends DCLogic {
     bands.forEach((b,i)=>{ b.end=undefined; if(b.type==='low-cut'&&(lo<0||b.freqHz<bands[lo].freqHz))lo=i; if(b.type==='high-cut'&&(hi<0||b.freqHz>bands[hi].freqHz))hi=i; });
     if(lo>=0)bands[lo].end='lo'; else bands.unshift({type:'low-cut',freqHz:20,gainDb:0,q:0.71,on:false,slopeDbOct:12,muted:false,soloed:false,end:'lo',dyn:this._eqDynDefault()});
     if(hi>=0)bands[hi].end='hi'; else bands.push({type:'high-cut',freqHz:20000,gainDb:0,q:0.71,on:false,slopeDbOct:12,muted:false,soloed:false,end:'hi',dyn:this._eqDynDefault()});
-    let mid=0; return bands.filter(b=>b.end?true:(++mid<=this.EQ_MAX_MID));
+    let mid=0; const out=bands.filter(b=>b.end?true:(++mid<=this.EQ_MAX_MID));
+    for(const b of out){ if(b.id===undefined)b.id=++this._eqIdSeq; else if(b.id>this._eqIdSeq)this._eqIdSeq=b.id; }
+    return out;
   }
   _eqCoeffs(type,f,gainDb,q,sr){ return this.core._eqCoeffs(type,f,gainDb,q,sr); }
   _eqSections(bd,f,g,q,sr){ return this.core._eqSections(bd,f,g,q,sr); }
@@ -944,6 +1082,8 @@ class Component extends DCLogic {
     return this.eqBands.map(b=>{
       if(!(b.on&&!b.muted&&(!anySolo||b.soloed)))return null;
       if(this.running&&b._secs)return b._secs;
+      if(this.running&&this._usingWorklet&&b._fS!==undefined)
+        return this._eqSections(b,b._fS,b._gS+((b.dyn&&b.dyn.on)?(b._gr||0):0),b._qS,sr);
       const gr=(b.dyn&&b.dyn.on)?(b._gr||0):0;
       return this._eqSections(b,Math.max(10,Math.min(sr*0.49,b.freqHz)),b.gainDb+gr,Math.max(0.1,b.q),sr);
     });
@@ -951,7 +1091,7 @@ class Component extends DCLogic {
   _eqAdd(f,g){
     if(this.eqBands.filter(b=>!b.end).length>=this.EQ_MAX_MID)return; // locked cap: 12 middle bands + 2 ends
     const before=this.snapshot();
-    const nb={type:'bell',freqHz:Math.max(20,Math.min(20000,f||1000)),gainDb:Math.max(-12,Math.min(12,g||0)),q:1,on:true,slopeDbOct:12,muted:false,soloed:false,dyn:this._eqDynDefault()};
+    const nb={id:++this._eqIdSeq,type:'bell',freqHz:Math.max(20,Math.min(20000,f||1000)),gainDb:Math.max(-12,Math.min(12,g||0)),q:1,on:true,slopeDbOct:12,muted:false,soloed:false,dyn:this._eqDynDefault()};
     const hiIdx=this.eqBands.findIndex(b=>b.end==='hi');
     if(hiIdx>=0)this.eqBands.splice(hiIdx,0,nb); else this.eqBands.push(nb);
     this.eqSel=this.eqBands.indexOf(nb); this.pushUndoIfChanged(before); this.setState({});
@@ -1405,7 +1545,7 @@ class Component extends DCLogic {
           const buf=await file.arrayBuffer();
           const r=this.parseMidi(buf);
           if(!r.events.length)throw new Error('No playable notes found');
-          this.core.midiEvents=r.events; this.core.midiDur=r.dur; this.midiBpm=r.bpm||120;
+          this.core.midiEvents=r.events; this.core.midiDur=r.dur; this.midiBpm=r.bpm||120; this._sendMidiToWorklet();
           this.seekTo(0); this.setPlaying(false);
           this._midiErr=null;
           this.setState({midiName:file.name,midiDur:r.dur});
