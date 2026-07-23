@@ -94,15 +94,58 @@ ok('2-frame stepped table parses', lib.parseWavetable(F('two-frame-stepped.wav')
 // rejects
 throws('corrupt file rejects readably', () => lib.parseWavetable(F('corrupt.wav')), /fmt chunk|too short|Not a RIFF/i);
 throws('surge sample-flag rejects', () => lib.parseWavetable(F('surge-sample-flag.wt')), /sample, not a wavetable/);
-// surge
+throws('surge zero-frame header rejects', () => lib.parseWavetable(F('surge-zero-frames.wt')), /zero frames/);
+throws('non-finite float samples reject', () => lib.parseWavetable(F('nonfinite-float.wav')), /non-finite/);
+throws('short fmt chunk rejects', () => lib.parseWavetable(F('short-fmt.wav')), /fmt chunk too short/);
+throws('bogus EXTENSIBLE GUID rejects', () => lib.parseWavetable(F('bad-guid-extensible.wav')), /SubFormat GUID/);
+
+// surge — REAL flag masks (wtf_is_sample=1, int16=4, int16_is_16=8, has_metadata=0x10)
 {
-  const t = lib.parseWavetable(F('surge-4x512.wt'));
-  ok('surge .wt: 4x512 int16 full-range', t.frames === 4 && t.frameSize === 512 && t.channels === 1 && t.meta.source === 'vawt');
+  const full = lib.parseWavetable(F('surge-4x512-int16.wt'));
+  ok('surge int16 full-range (flags 0x0c) parses', full.frames === 4 && full.frameSize === 512 && full.channels === 1 && full.meta.source === 'vawt');
+  ok('surge int16 full-range decodes to ~unity peak', Math.max(...full.dataL.map(Math.abs)) > 0.9);
+  const half = lib.parseWavetable(F('surge-4x512-int15.wt'));
+  ok('surge 15-bit range (flags 0x04) parses and scales the same', Math.abs(Math.max(...half.dataL.map(Math.abs)) - Math.max(...full.dataL.map(Math.abs))) < 0.01);
+  const flt = lib.parseWavetable(F('surge-4x512-float.wt'));
+  ok('surge float32 (no int16 flag) parses', flt.frames === 4 && Math.max(...flt.dataL.map(Math.abs)) > 0.9);
+  const meta = lib.parseWavetable(F('surge-metadata.wt'));
+  ok('surge has_metadata tail does not disturb frame math', meta.frames === 4 && meta.frameSize === 512);
+  const liar = lib.parseWavetable(F('surge-liar-header.wt'));
+  ok('surge hostile header (claims 60000 frames) clamps to what the file holds', liar.frames === 4 && liar.meta.truncated.some(x => /only 4 of 60000/.test(x)), liar.meta.truncated.join('; '));
+}
+// malformed clm is ignored, not trusted
+{
+  const t = lib.parseWavetable(F('bad-clm.wav'));
+  ok('malformed clm ignored; falls back to inference', t.meta.source === 'inferred' && t.frameSize === 2048 && t.meta.truncated.some(x => /malformed clm/.test(x)), t.meta.truncated.join('; '));
 }
 // hash distinguishes content and metadata
 {
   const a = lib.parseWavetable(F('clm-4x2048-int16.wav')), b = lib.parseWavetable(F('clm-4x2048-float32.wav'));
   ok('hash differs across bit-depth/interp variants', lib.wtHashTable(a) !== lib.wtHashTable(b));
+}
+// INDEPENDENT canonical-hash oracle: rebuild the contract's byte image here (explicit LE DataView
+// writes, node crypto) rather than comparing the implementation to itself — this catches a
+// deterministic mistake in field order/inclusion, which self-comparison cannot.
+{
+  const crypto = require('crypto');
+  const oracle = (t) => {
+    const n = t.dataL.length + (t.dataR ? t.dataR.length : 0);
+    const buf = Buffer.alloc(n * 4 + 16);
+    let o = 0;
+    for (let i = 0; i < t.dataL.length; i++) { buf.writeFloatLE(t.dataL[i], o); o += 4; }
+    if (t.dataR) for (let i = 0; i < t.dataR.length; i++) { buf.writeFloatLE(t.dataR[i], o); o += 4; }
+    buf.writeUInt32LE(t.frameSize, o); buf.writeUInt32LE(t.frames, o + 4);
+    buf.writeUInt32LE(t.channels, o + 8); buf.writeUInt32LE(t.meta.interp.raw, o + 12);
+    return crypto.createHash('sha256').update(buf).digest('hex');
+  };
+  for (const f of ['clm-4x2048-int16.wav', 'stereo-xy-4x2048.wav', 'surge-4x512-int16.wt']) {
+    const t = lib.parseWavetable(F(f));
+    ok('hash matches independent oracle: ' + f, lib.wtHashTable(t) === oracle(t), lib.wtHashTable(t).slice(0, 16));
+  }
+  // and the oracle is sensitive to field order/inclusion (guard against a vacuous oracle)
+  const t = lib.parseWavetable(F('clm-4x2048-int16.wav'));
+  const mutated = Object.assign({}, t, { frames: t.frames + 1 });
+  ok('oracle is sensitive to metadata changes', oracle(mutated) !== oracle(t));
 }
 // opportunistic private real-table check (copyright: never committed)
 const priv = path.join(__dirname, 'fixtures', 'private');

@@ -86,15 +86,37 @@ wav('hot-float.wav', [fmtChunk({ format: 3, bits: 32 }), clmChunk(N, 1, 'hot'), 
 // corrupt: RIFF header, then garbage
 fs.writeFileSync(path.join(DIR, 'corrupt.wav'), Buffer.concat([Buffer.from('RIFFxxxxWAVE', 'ascii'), Buffer.from([1, 2, 3, 4, 5])]));
 
-// Surge .wt: 4 x 512 int16 full-range
+// Surge .wt — REAL flag masks from surge/src/common/dsp/Wavetable.h `wtflags`:
+// wtf_is_sample=1, wtf_loop_sample=2, wtf_int16=4, wtf_int16_is_16=8, wtf_has_metadata=0x10
+const WTF = { IS_SAMPLE: 0x01, LOOP: 0x02, INT16: 0x04, INT16_IS_16: 0x08, HAS_METADATA: 0x10 };
+function wtFile(file, { frameSize, frames, flags, samples, extraTail = null, declaredFrames = null }) {
+  const head = Buffer.alloc(12); head.write('vawt', 0, 'ascii');
+  head.writeUInt32LE(frameSize, 4); head.writeUInt16LE(declaredFrames == null ? frames : declaredFrames, 8); head.writeUInt16LE(flags, 10);
+  let b;
+  if (flags & WTF.INT16) { const sc = (flags & WTF.INT16_IS_16) ? 32767 : 16383; b = Buffer.alloc(samples.length * 2); samples.forEach((v, i) => b.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(v * sc))), i * 2)); }
+  else { b = Buffer.alloc(samples.length * 4); samples.forEach((v, i) => b.writeFloatLE(v, i * 4)); }
+  fs.writeFileSync(path.join(DIR, file), Buffer.concat([head, b, extraTail || Buffer.alloc(0)]));
+}
 {
   const n = 512, fr = 4;
   const smp = concatF(Array.from({ length: fr }, (_, f) => frame(n, p => saw(p, 4 + f * 8))));
-  const head = Buffer.alloc(12); head.write('vawt', 0, 'ascii'); head.writeUInt32LE(n, 4); head.writeUInt16LE(fr, 8); head.writeUInt16LE(0x80 | 0x40, 10);
-  const b = Buffer.alloc(smp.length * 2); smp.forEach((v, i) => b.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(v * 32767))), i * 2));
-  fs.writeFileSync(path.join(DIR, 'surge-4x512.wt'), Buffer.concat([head, b]));
-  // and a "sample" flagged .wt that must be rejected
-  const head2 = Buffer.from(head); head2.writeUInt16LE(0x40 | 0x10, 10);
-  fs.writeFileSync(path.join(DIR, 'surge-sample-flag.wt'), Buffer.concat([head2, b.subarray(0, 1024)]));
+  // standard int16 full-range table (flags 0x0c) — the case the old shifted masks got wrong
+  wtFile('surge-4x512-int16.wt', { frameSize: n, frames: fr, flags: WTF.INT16 | WTF.INT16_IS_16, samples: smp });
+  // 15-bit range variant (flags 0x04)
+  wtFile('surge-4x512-int15.wt', { frameSize: n, frames: fr, flags: WTF.INT16, samples: smp });
+  // float32 table (no int16 flag)
+  wtFile('surge-4x512-float.wt', { frameSize: n, frames: fr, flags: 0, samples: smp });
+  // metadata-flagged: XML appended after the sample data must not confuse frame math
+  wtFile('surge-metadata.wt', { frameSize: n, frames: fr, flags: WTF.INT16 | WTF.INT16_IS_16 | WTF.HAS_METADATA, samples: smp, extraTail: Buffer.from('<wavetable name="x"/>\0', 'ascii') });
+  // rejects: sample flag, zero frames
+  wtFile('surge-sample-flag.wt', { frameSize: n, frames: fr, flags: WTF.INT16 | WTF.INT16_IS_16 | WTF.IS_SAMPLE, samples: smp });
+  wtFile('surge-zero-frames.wt', { frameSize: n, frames: fr, flags: WTF.INT16 | WTF.INT16_IS_16, samples: smp, declaredFrames: 0 });
+  // hostile: header claims 60000 frames, file holds 4 — must not allocate for the claim
+  wtFile('surge-liar-header.wt', { frameSize: n, frames: fr, flags: WTF.INT16 | WTF.INT16_IS_16, samples: smp, declaredFrames: 60000 });
 }
+// WAV hostile set for the hardened paths
+wav('nonfinite-float.wav', [fmtChunk({ format: 3, bits: 32 }), clmChunk(N, 1, 'nan'), dataChunk(Float32Array.from(morph4.subarray(0, N), (v, i) => i === 500 ? NaN : v), 32, 3)]);
+wav('short-fmt.wav', [chunk('fmt ', Buffer.alloc(8)), dataChunk(morph4.subarray(0, N), 16, 1)]);
+wav('bad-guid-extensible.wav', [(() => { const b = Buffer.alloc(40); b.writeUInt16LE(0xFFFE, 0); b.writeUInt16LE(1, 2); b.writeUInt32LE(44100, 4); b.writeUInt32LE(88200, 8); b.writeUInt16LE(2, 12); b.writeUInt16LE(16, 14); b.writeUInt16LE(22, 16); b.writeUInt16LE(16, 18); b.writeUInt16LE(1, 24); Buffer.from([9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9]).copy(b, 26); return chunk('fmt ', b); })(), dataChunk(morph4.subarray(0, N), 16, 1)]);
+wav('bad-clm.wav', [fmtChunk({}), chunk('clm ', Buffer.from('<!>3 9000000 bogus ', 'ascii')), dataChunk(morph4.subarray(0, N * 2), 16, 1)]);
 console.log('fixtures written to', DIR, fs.readdirSync(DIR).length, 'files');

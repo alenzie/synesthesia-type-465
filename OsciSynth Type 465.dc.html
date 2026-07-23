@@ -285,8 +285,10 @@ function wtSha256(bytes){
 function wtHashTable(t){
   const n=t.dataL.length+(t.dataR?t.dataR.length:0);
   const buf=new ArrayBuffer(n*4+16), dvv=new DataView(buf);
-  new Float32Array(buf,0,t.dataL.length).set(t.dataL);
-  if(t.dataR)new Float32Array(buf,t.dataL.length*4,t.dataR.length).set(t.dataR);
+  // EXPLICIT little-endian: a typed-array set() would write host-endian bytes and silently break the
+  // canonical-hash contract on a big-endian host (and against the C++ port).
+  for(let i=0;i<t.dataL.length;i++)dvv.setFloat32(i*4,t.dataL[i],true);
+  if(t.dataR)for(let i=0;i<t.dataR.length;i++)dvv.setFloat32(t.dataL.length*4+i*4,t.dataR[i],true);
   let o=n*4;
   dvv.setUint32(o,t.frameSize,true); dvv.setUint32(o+4,t.frames,true); dvv.setUint32(o+8,t.channels,true); dvv.setUint32(o+12,t.meta.interp.raw,true);
   return wtSha256(new Uint8Array(buf));
@@ -304,18 +306,25 @@ function parseWavetable(buf){
     return {frameSize,frames,channels,dataL,dataR,meta};
   };
   if(tag(0)==='vawt'){
-    const frameSize=dvv.getUint32(4,true), frames=dvv.getUint16(8,true), flags=dvv.getUint16(10,true);
-    if(flags&0x10)throw new Error('This .wt is flagged as a sample, not a wavetable.');
-    if(frameSize<2||(frameSize&(frameSize-1)))throw new Error('Invalid .wt cycle size '+frameSize+'.');
-    const isInt=!!(flags&0x40), full=!!(flags&0x80), n=frameSize*frames;
-    const need=12+n*(isInt?2:4);
-    if(buf.byteLength<need)throw new Error('.wt data shorter than header claims.');
-    const dataL=new Float32Array(n);
+    // Surge XT flag masks per src/common/dsp/Wavetable.h `wtflags`:
+    // wtf_is_sample=1, wtf_loop_sample=2, wtf_int16=4, wtf_int16_is_16=8, wtf_has_metadata=0x10.
+    const WTF_IS_SAMPLE=0x01, WTF_INT16=0x04, WTF_INT16_IS_16=0x08;
+    if(buf.byteLength<12)throw new Error('.wt header truncated.');
+    const frameSize=dvv.getUint32(4,true), hdrFrames=dvv.getUint16(8,true), flags=dvv.getUint16(10,true);
+    if(flags&WTF_IS_SAMPLE)throw new Error('This .wt is flagged as a sample, not a wavetable.');
+    if(frameSize<2||frameSize>8192||(frameSize&(frameSize-1)))throw new Error('Invalid .wt cycle size '+frameSize+'.');
+    if(hdrFrames<1)throw new Error('.wt declares zero frames.');
+    const isInt=!!(flags&WTF_INT16), full=!!(flags&WTF_INT16_IS_16), bps=isInt?2:4;
+    // CAP FIRST, then allocate: a hostile header must never size an allocation we do not keep.
+    let fr=hdrFrames;
+    if(fr>256){ truncated.push('capped to first 256 of '+fr+' frames'); fr=256; }
+    const avail=Math.floor((buf.byteLength-12)/(frameSize*bps));
+    if(avail<1)throw new Error('.wt data shorter than one frame.');
+    if(avail<fr){ truncated.push('file holds only '+avail+' of '+hdrFrames+' declared frames'); fr=avail; }
+    const n=frameSize*fr, dataL=new Float32Array(n);
     if(isInt){ const sc=full?32768:16384; for(let i=0;i<n;i++)dataL[i]=dvv.getInt16(12+i*2,true)/sc; }
-    else for(let i=0;i<n;i++)dataL[i]=dvv.getFloat32(12+i*4,true);
-    let fr=frames, dl=dataL;
-    if(fr>256){ truncated.push('capped to first 256 of '+fr+' frames'); fr=256; dl=dataL.subarray(0,frameSize*256).slice(); }
-    return finish(frameSize,fr,1,dl,null,{source:'vawt',interp:{raw:1,play:1},comment:'',truncated,sampleRate:0});
+    else for(let i=0;i<n;i++){ const v=dvv.getFloat32(12+i*4,true); if(!isFinite(v))throw new Error('.wt contains non-finite sample data.'); dataL[i]=v; }
+    return finish(frameSize,fr,1,dataL,null,{source:'vawt',interp:{raw:1,play:1},comment:'',truncated,sampleRate:0});
   }
   if(tag(0)!=='RIFF'||tag(8)!=='WAVE')throw new Error('Not a RIFF/WAVE or .wt wavetable file.');
   let o=12, fmt=null, dataOff=-1, dataLen=0, clm=null;
@@ -330,11 +339,17 @@ function parseWavetable(buf){
   }
   if(!fmt)throw new Error('WAV has no fmt chunk.');
   if(dataOff<0)throw new Error('WAV has no data chunk.');
+  if(fmt.size<16)throw new Error('WAV fmt chunk too short ('+fmt.size+' bytes).');
   let audioFormat=dvv.getUint16(fmt.o,true);
   const channels=dvv.getUint16(fmt.o+2,true), sampleRate=dvv.getUint32(fmt.o+4,true), bits=dvv.getUint16(fmt.o+14,true);
   if(audioFormat===0xFFFE){
-    if(fmt.size<26)throw new Error('EXTENSIBLE fmt chunk too short.');
-    audioFormat=dvv.getUint16(fmt.o+24,true); // SubFormat GUID first two bytes
+    // WAVEFORMATEXTENSIBLE: need cbSize>=22 AND the full 16-byte SubFormat GUID, whose tail must be the
+    // standard KSDATAFORMAT suffix — otherwise a truncated/bogus GUID would be accepted as PCM/float.
+    if(fmt.size<40)throw new Error('EXTENSIBLE fmt chunk too short.');
+    if(dvv.getUint16(fmt.o+16,true)<22)throw new Error('EXTENSIBLE cbSize too small.');
+    const TAIL=[0x00,0x00,0x10,0x00,0x80,0x00,0x00,0xAA,0x00,0x38,0x9B,0x71];
+    for(let i=0;i<TAIL.length;i++)if(U8[fmt.o+26+i]!==TAIL[i])throw new Error('Unrecognized EXTENSIBLE SubFormat GUID.');
+    audioFormat=dvv.getUint16(fmt.o+24,true);
   }
   if(audioFormat!==1&&audioFormat!==3)throw new Error('Unsupported WAV format '+audioFormat+' (need PCM or float).');
   if(channels<1||channels>2)throw new Error(channels+'-channel WAV — wavetables are mono or stereo.');
@@ -344,12 +359,17 @@ function parseWavetable(buf){
   let nTotal=Math.floor(dataLen/(bytesPer*channels));
   if(nTotal<8)throw new Error('WAV data too short.');
   const read=(idx)=>{ const off=dataOff+idx*bytesPer;
-    if(audioFormat===3)return dvv.getFloat32(off,true);
+    if(audioFormat===3){ const v=dvv.getFloat32(off,true); if(!isFinite(v))throw new Error('WAV contains non-finite (NaN/Inf) sample data.'); return v; }
     if(bits===16)return dvv.getInt16(off,true)/32768;
     if(bits===32)return dvv.getInt32(off,true)/2147483648;
     let v=U8[off]|(U8[off+1]<<8)|(U8[off+2]<<16); if(v&0x800000)v-=0x1000000; return v/8388608; };
   let frameSize=0, rawInterp=1, source='inferred', comment='', ambiguous=false;
-  if(clm){ const mm=/^<!>(\d{1,5})\s+(\d)\d{0,7}\s*/.exec(clm); if(mm){ frameSize=parseInt(mm[1],10); rawInterp=parseInt(mm[2],10); source='clm'; comment=clm.slice(mm[0].length).replace(/[^\x20-\x7e]/g,'').trim(); } } // payload is "<!>AAAA BC000000 D" — consume the whole flags block before the comment
+  if(clm){ const mm=/^<!>(\d{1,5})\s+(\d)\d{0,7}\s*/.exec(clm);
+    if(mm){ const fs=parseInt(mm[1],10), ip=parseInt(mm[2],10);
+      // A malformed clm must not smuggle a bogus frame size / interp mode past the inference path.
+      if(fs>=64&&fs<=8192&&!(fs&(fs-1))&&ip>=0&&ip<=4){ frameSize=fs; rawInterp=ip; source='clm'; comment=clm.slice(mm[0].length).replace(/[^\x20-\x7e]/g,'').trim(); }
+      else truncated.push('ignored malformed clm chunk (size '+fs+', interp '+ip+')');
+    } } // payload is "<!>AAAA BC000000 D" — consume the whole flags block before the comment
   if(!frameSize){
     const cands=[2048,1024,512,256,4096,8192].filter(fs=>nTotal>=fs&&nTotal%fs===0&&Math.floor(nTotal/fs)<=256);
     if(!cands.length){ frameSize=2048; if(nTotal<2048)throw new Error('No usable frame size for '+nTotal+' samples.'); }
