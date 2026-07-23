@@ -1,16 +1,21 @@
 // Phase-1 browser pass via Playwright headless Chromium.
 // Verifies: app mounts from file://, AudioWorklet path engages (blob addModule), audio flows,
 // beam telemetry arrives, notes work, EQ interaction + undo, FAUST download, forced-SPN fallback.
-const { chromium } = require('playwright-core');
+// Usage: node browser-pass.js [file-url] [--firefox]
+const useFF = process.argv.includes('--firefox');
+const { chromium, firefox } = require('playwright-core');
 
-const URL = 'file:///mnt/c/Users/alexb/Desktop/Dev%20Stuff/SYNTH/OsciSynth%20Type%20465/OsciSynth%20Type%20465.dc.html';
+const URL = (process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : null)
+  || 'file://' + encodeURI(require('path').resolve(__dirname, '..', 'OsciSynth Type 465.dc.html'));
 const results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok, detail }); console.log((ok ? 'PASS' : 'FAIL') + '  ' + name + (detail ? '  — ' + detail : '')); };
 
 (async () => {
-  const browser = await chromium.launch({
+  const browser = await (useFF ? firefox : chromium).launch({
     headless: true,
-    args: ['--autoplay-policy=no-user-gesture-required'],
+    ...(useFF
+      ? { firefoxUserPrefs: { 'media.autoplay.default': 0, 'media.autoplay.blocking_policy': 0 } }
+      : { args: ['--autoplay-policy=no-user-gesture-required'] }),
   });
   const page = await browser.newPage({ acceptDownloads: true });
   const pageErrors = [], consoleMsgs = [];
