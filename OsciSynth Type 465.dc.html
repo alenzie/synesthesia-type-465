@@ -117,15 +117,6 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
       </div>
     </div>
     <div style="flex:0 0 190px;display:flex;flex-direction:column;gap:12px;align-items:center;justify-content:space-between">
-      <div style="width:100%;background:linear-gradient(180deg,#f6f1e0,#e9e3cf);border:1px solid #8f8a77;border-radius:6px;position:relative;height:92px;overflow:hidden;box-shadow:inset 0 1px 3px rgba(0,0,0,.25)">
-        <svg width="170" height="92" viewBox="0 0 170 92" style="position:absolute;inset:0;width:100%;height:100%">
-          <path d="M45.2 46.6 L37.5 40.1 M63 32.9 L58.8 23.8 M85 28 L85 18 M107 32.9 L111.2 23.8 M124.8 46.6 L132.5 40.1" stroke="#6b6656" stroke-width="1.6"></path>
-          <path d="M109.1 28.3 A57 57 0 0 1 128.7 43.4" fill="none" stroke="#c8452e" stroke-width="3.5"></path>
-        </svg>
-        <div ref="{{needleRef}}" style="position:absolute;left:50%;bottom:10px;width:2px;height:56px;margin-left:-1px;background:#1c1a14;transform-origin:50% 100%;transform:rotate(-50deg)"></div>
-        <div style="position:absolute;left:50%;bottom:6px;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:#2a2822"></div>
-        <div style="position:absolute;bottom:4px;right:8px;font:600 7px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#6b6656">VU · OUT</div>
-      </div>
       <div onPointerDown="{{masterDown}}" style="display:flex;flex-direction:column;align-items:center;gap:5px;cursor:ns-resize;user-select:none;touch-action:none">
         <div style="width:58px;height:58px;border-radius:50%;background:radial-gradient(circle at 35% 28%,#403e38,#15140f 72%);box-shadow:0 3px 6px rgba(0,0,0,.4),inset 0 1px 2px rgba(255,255,255,.18);position:relative">
           <div style="{{masterPtr}}"></div>
@@ -155,6 +146,15 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
       </div>
       <div onClick="{{selNext}}" style="background:#17160f;color:#ffb454;font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.12em;padding:8px 14px;border-radius:4px;box-shadow:inset 0 1px 4px #000;cursor:pointer;min-width:130px;text-align:center" title="Click to cycle">{{selName}}</div>
       <div style="flex:1;min-width:220px;font:400 8.5px 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#6d6858">{{genHint}}</div>
+      <div style="flex:0 0 118px;background:linear-gradient(180deg,#f6f1e0,#e9e3cf);border:1px solid #8f8a77;border-radius:6px;position:relative;height:62px;overflow:hidden;box-shadow:inset 0 1px 3px rgba(0,0,0,.25)" title="Output VU (relocated)">
+        <svg viewBox="0 0 170 92" style="position:absolute;inset:0;width:100%;height:100%">
+          <path d="M45.2 46.6 L37.5 40.1 M63 32.9 L58.8 23.8 M85 28 L85 18 M107 32.9 L111.2 23.8 M124.8 46.6 L132.5 40.1" stroke="#6b6656" stroke-width="1.6"></path>
+          <path d="M109.1 28.3 A57 57 0 0 1 128.7 43.4" fill="none" stroke="#c8452e" stroke-width="3.5"></path>
+        </svg>
+        <div ref="{{needleRef}}" style="position:absolute;left:50%;bottom:7px;width:2px;height:36px;margin-left:-1px;background:#1c1a14;transform-origin:50% 100%;transform:rotate(-50deg)"></div>
+        <div style="position:absolute;left:50%;bottom:4px;width:8px;height:8px;margin-left:-4px;border-radius:50%;background:#2a2822"></div>
+        <div style="position:absolute;bottom:3px;right:6px;font:600 6px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#6b6656">VU · OUT</div>
+      </div>
     </div>
 
     <sc-if value="{{eqAnalyzerOn}}" hint-placeholder-val="{{ true }}">
@@ -173,9 +173,14 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
       <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
         <sc-for list="{{eqChips}}" as="c" hint-placeholder-count="3"><div onPointerDown="{{c.down}}" onWheel="{{c.wheel}}" style="{{eqChipStyle}}"><span style="{{eqChipLabelStyle}}">{{c.label}}</span><span style="{{eqChipValStyle}}">{{c.val}}</span></div></sc-for>
         <div onClick="{{eqDynToggle}}" title="Per-band dynamics on/off" style="{{eqDynBtnStyle}}">DYN</div>
-        <sc-if value="{{eqDynOn}}" hint-placeholder-val="{{ true }}"><div onClick="{{eqDynModeToggle}}" title="Dynamics direction: cut (down) or boost (up)" style="{{eqDynBtnStyle}}">{{eqDynModeLabel}}</div></sc-if>
+        <sc-if value="{{eqDynOn}}" hint-placeholder-val="{{ true }}"><div onClick="{{eqDynModeToggle}}" title="Dynamics direction: cut (down) or boost (up)" style="{{eqDynBtnStyle}}">{{eqDynModeLabel}}</div>
+        <span ref="{{grSelRef}}" title="Live gain movement of the selected band (dB)" style="font:600 8px 'IBM Plex Mono',monospace;letter-spacing:.08em;color:#8a5a1e;background:#17160f;border-radius:3px;padding:4px 7px;min-width:52px;text-align:center">GR 0.0</span></sc-if>
         <sc-for list="{{eqDynChips}}" as="c" hint-placeholder-count="5"><div onPointerDown="{{c.down}}" onWheel="{{c.wheel}}" style="{{eqChipStyle}}"><span style="{{eqChipLabelStyle}}">{{c.label}}</span><span style="{{eqChipValStyle}}">{{c.val}}</span></div></sc-for>
         <div style="flex:1;min-width:8px"></div>
+        <div title="Output peak (top) / RMS (bottom), -60..0 dB" style="display:flex;flex-direction:column;gap:2px;width:92px;justify-content:center">
+          <div style="height:5px;background:#0d1a10;border-radius:2px;overflow:hidden;border:1px solid #2c4a36"><div ref="{{outPeakBarRef}}" style="height:100%;width:0%;background:linear-gradient(90deg,#6ae08a,#e0c060 70%,#e0603a 92%)"></div></div>
+          <div style="height:5px;background:#0d1a10;border-radius:2px;overflow:hidden;border:1px solid #2c4a36"><div ref="{{outRmsBarRef}}" style="height:100%;width:0%;background:linear-gradient(90deg,#3aa0e0,#8fe0ab)"></div></div>
+        </div>
         <sc-for list="{{eqGlobChips}}" as="c" hint-placeholder-count="2"><div onPointerDown="{{c.down}}" onWheel="{{c.wheel}}" style="{{eqChipStyle}}"><span style="{{eqChipLabelStyle}}">{{c.label}}</span><span style="{{eqChipValStyle}}">{{c.val}}</span></div></sc-for>
         <div onClick="{{exportFaust}}" title="Export the EQ chain as a compilable Faust .dsp" style="{{eqBtnStyle}}">↓ FAUST</div>
       </div>
@@ -336,7 +341,7 @@ class Component extends DCLogic {
       ['radial-gradient(circle at 40% 35%,#ffc4b2,#e03a20)','0 0 6px rgba(235,85,55,.8)'],
     ];
     this._refs={};
-    ['beamRef','fpsRef','needleRef','fileRef','seekThumbRef','timeRef','dotsRef','presetFileRef','presetNameInputRef','presetNameRef'].forEach(n=>{ this[n]=el=>{this._refs[n]=el; if(n==='beamRef'&&el)this.sizeBeam();}; });
+    ['beamRef','fpsRef','needleRef','fileRef','seekThumbRef','timeRef','dotsRef','presetFileRef','presetNameInputRef','presetNameRef','outPeakBarRef','outRmsBarRef','grSelRef'].forEach(n=>{ this[n]=el=>{this._refs[n]=el; if(n==='beamRef'&&el)this.sizeBeam();}; });
   }
   mtof(n){return 440*Math.pow(2,(n-69)/12);}
   meterDot(i,lv){ const on=lv*10>=i+0.5, c=this.DOTCOLS[i<5?0:i<8?1:2]; return {bg:on?c[0]:'#8f8a77', sh:on?c[1]:'inset 0 1px 1px rgba(0,0,0,.3)'}; }
@@ -426,7 +431,7 @@ class Component extends DCLogic {
     const bpm=(this.midiPlaying?this.midiBpm:(this.state.bpm||120)), divHz=(d)=>(bpm/60)/((this.FM_DIVS[(d|0)]||this.FM_DIVS[6]).b);
     const dv=this.voices[0];
     dv.gate=this.state.drone&&this.running; dv.freq=P.baseFreq; dv.vel=1; if(dv.note<0)dv.note=0;
-    let blockPeak=0;
+    let blockPeak=0, blockSq=0;
     this._eqActive=this.eqBands&&this.eqBands.length>0; if(this._eqActive)this._eqPrep(sr,n);
     const eqMix=this.P.eqMix, eqOutG=Math.pow(10,this.P.eqOut/20); this._eqMix=eqMix; this._eqOutG=eqOutG; this._eqPre=(this.state.eqTap==='pre');
     for(let i=0;i<n;i++){
@@ -489,9 +494,10 @@ class Component extends DCLogic {
       let eL=oL,eR=oR;
       if(this._eqActive&&!this._eqPre){ this._eqApply(oL,oR,i,sr); eL=this._eqL; eR=this._eqR; }
       L[i]=eL;R[i]=eR;
-      const pk=Math.max(Math.abs(eL),Math.abs(eR)); if(pk>blockPeak)blockPeak=pk;
+      const pk=Math.max(Math.abs(eL),Math.abs(eR)); if(pk>blockPeak)blockPeak=pk; blockSq+=eL*eL+eR*eR;
     }
     if(blockPeak>this.outPeak)this.outPeak=blockPeak;
+    this.outSq=(this.outSq||0)+blockSq; this.outSqN=(this.outSqN||0)+n*2;
   }
   async power(on){
     if(on){
@@ -632,7 +638,9 @@ class Component extends DCLogic {
       }
       for(let i=0;i<this.eqBands.length;i++){ const b=this.eqBands[i]; const hx=f2x(Math.max(20,Math.min(20000,b.freqHz))), hy=g2y(Math.max(-18,Math.min(18,b.gainDb))), col=COL[i%COL.length], rad=(i===this.eqSel?9:7)*DPR;
         bctx.globalAlpha=(i===this.eqSel?0.95:0.72); bctx.beginPath(); bctx.arc(hx,hy,rad,0,Math.PI*2); bctx.fillStyle=b.on?col:'#4a4a4a'; bctx.fill(); bctx.globalAlpha=1; bctx.lineWidth=(i===this.eqSel?2:1)*DPR; bctx.strokeStyle='#fff'; bctx.stroke();
-        bctx.fillStyle='#111'; bctx.font='700 '+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.textAlign='center'; bctx.textBaseline='middle'; bctx.fillText(''+(i+1),hx,hy); }
+        bctx.fillStyle='#111'; bctx.font='700 '+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.textAlign='center'; bctx.textBaseline='middle'; bctx.fillText(''+(i+1),hx,hy);
+        if(b.dyn&&b.dyn.on&&b._eff&&Math.abs(b._gr||0)>0.05){ const px=plotH/36; const len=Math.max(-plotH/3,Math.min(plotH/3,-(b._gr)*px)); // live GR tick: down = reduction
+          bctx.beginPath(); bctx.moveTo(hx,hy+(len>0?rad:-rad)); bctx.lineTo(hx,hy+(len>0?rad:-rad)+len); bctx.strokeStyle=col; bctx.lineWidth=3*DPR; bctx.globalAlpha=0.9; bctx.stroke(); bctx.globalAlpha=1; } }
       bctx.textBaseline='alphabetic';
     }
     bctx.fillStyle='rgba(150,255,190,0.5)'; bctx.textAlign='left'; bctx.font="600 "+(8*DPR)+"px 'IBM Plex Mono',monospace"; bctx.fillText('SPECTRUM · 20Hz–20kHz · drag notch · dbl-click add · wheel Q',10*DPR,14*DPR);
@@ -655,6 +663,11 @@ class Component extends DCLogic {
     this._fAcc=(this._fAcc||0)+(now-(this._lastT||now)); this._fCnt=(this._fCnt||0)+1; this._lastT=now;
     if(this._fCnt>=30){ if(this._refs.fpsRef)this._refs.fpsRef.textContent=(1000/(this._fAcc/this._fCnt)).toFixed(0)+' FPS'; this._fAcc=0;this._fCnt=0; }
     this.meterVal=Math.max(this.outPeak,this.meterVal*0.88); this.outPeak=0;
+    { const rmsNow=this.outSqN?Math.sqrt(this.outSq/this.outSqN):0; this.meterRms=Math.max(rmsNow,(this.meterRms||0)*0.92); this.outSq=0; this.outSqN=0;
+      const pct=v=>{ const db=20*Math.log10(Math.max(1e-4,v)); return Math.max(0,Math.min(100,(db+60)/60*100)).toFixed(1)+'%'; };
+      if(this._refs.outPeakBarRef)this._refs.outPeakBarRef.style.width=pct(this.meterVal);
+      if(this._refs.outRmsBarRef)this._refs.outRmsBarRef.style.width=pct(this.meterRms);
+      if(this._refs.grSelRef){ const b=this.eqBands[this.eqSel]; const gr=(b&&b.dyn&&b.dyn.on)?(b._gr||0):0; this._refs.grSelRef.textContent='GR '+(gr>=0?'+':'')+gr.toFixed(1); } }
     if(this._refs.needleRef)this._refs.needleRef.style.transform='rotate('+(-50+100*Math.min(1,this.meterVal*1.15)).toFixed(1)+'deg)';
     if(this._refs.dotsRef){ const lv=Math.min(1,this.meterVal*1.15), ds=this._refs.dotsRef.querySelectorAll('span'); for(let i=0;i<ds.length;i++){ const d=this.meterDot(i,lv); ds[i].style.background=d.bg; ds[i].style.boxShadow=d.sh; } }
     if(this.midiEvents.length){
@@ -1333,7 +1346,7 @@ class Component extends DCLogic {
       octLabel:'C'+(s.octBase/12-1)+' – C'+(s.octBase/12+1),
       btnOct:hwBtn(false),
       fileRef:this.fileRef, seekThumbRef:this.seekThumbRef, timeRef:this.timeRef,
-      beamRef:this.beamRef, fpsRef:this.fpsRef, needleRef:this.needleRef, dotsRef:this.dotsRef,
+      beamRef:this.beamRef, fpsRef:this.fpsRef, needleRef:this.needleRef, dotsRef:this.dotsRef, outPeakBarRef:this.outPeakBarRef, outRmsBarRef:this.outRmsBarRef, grSelRef:this.grSelRef,
       loadClick:()=>{ if(this._refs.fileRef)this._refs.fileRef.click(); },
       fileChange:async e=>{
         const file=e.target.files[0]; if(!file)return;
