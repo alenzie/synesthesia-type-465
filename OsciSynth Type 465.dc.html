@@ -287,6 +287,7 @@ class Component extends DCLogic {
     // --- Phase 2: dynamic EQ (biquad cascade computed in process(); analyzer = the EQ view) ---
     this.P.eqMix=1; this.P.eqOut=0;
     this.EQ_TYPES=['bell','low-shelf','high-shelf','low-cut','high-cut','notch','band-pass','tilt'];
+    this.EQ_MAX_MID=12; // locked: 12 free bands + the 2 fixed end slots
     this.eqBands=this._eqDefaultBands(); this.eqSel=0;
     this.MODES=[['scope','SCOPE'],['wave','WAVE'],['mod','MOD'],['spectro','SPECTRO'],['analyzer','ANALYZER']];
     this.SYNCABLE={ fmRate:{s:'fmSync',d:'fmDivision',l:'FM DIV'}, lfoRate:{s:'lfoSync',d:'lfoDivision',l:'LFO DIV'}, morph:{s:'morphSync',d:'morphDivision',l:'MORPH ÷'}, rotX:{s:'rotXSync',d:'rotXDivision',l:'ROT X ÷'}, rotY:{s:'rotYSync',d:'rotYDivision',l:'ROT Y ÷'}, rotZ:{s:'rotZSync',d:'rotZDivision',l:'ROT Z ÷'} };
@@ -700,8 +701,9 @@ class Component extends DCLogic {
   // --- Phase 0: parameter model + history ------------------------------------
   _pmeta(id){ if(id==='master')return {min:0,max:1,step:0.001}; if(id==='eqMix')return {min:0,max:1,step:0.001}; if(id==='eqOut')return {min:-24,max:24,step:0.1}; const c=this.CTLS.find(x=>x[1]===id); return c?{min:c[3],max:c[4],step:c[5]}:null; }
   _paramIds(){ return this.CTLS.map(c=>c[1]).concat('master','fmSync','fmDivision','eqMix','eqOut','lfoSync','lfoDivision','morphSync','morphDivision','rotXSync','rotXDivision','rotYSync','rotYDivision','rotZSync','rotZDivision'); }
-  snapshot(){ const p={}; this._paramIds().forEach(id=>{ p[id]=this.P[id]; }); return {params:p, gen:this.state.gen}; }
-  applySnapshot(s){ if(!s)return; this._mutTok++; if(s.params)this._paramIds().forEach(id=>{ if(s.params[id]!==undefined)this.P[id]=s.params[id]; }); this.setState(s.gen?{gen:s.gen}:{}); }
+  _eqPersist(bands){ return (bands||[]).map(b=>({type:b.type,freqHz:b.freqHz,gainDb:b.gainDb,q:b.q,on:b.on,slopeDbOct:b.slopeDbOct||12,muted:!!b.muted,soloed:!!b.soloed,end:b.end||undefined,dyn:{on:!!(b.dyn&&b.dyn.on),mode:(b.dyn&&b.dyn.mode)||'down',threshDb:b.dyn?b.dyn.threshDb:-24,ratio:b.dyn?b.dyn.ratio:2,rangeDb:b.dyn?b.dyn.rangeDb:0,attackMs:b.dyn?b.dyn.attackMs:10,releaseMs:b.dyn?b.dyn.releaseMs:120}})); }
+  snapshot(){ const p={}; this._paramIds().forEach(id=>{ p[id]=this.P[id]; }); return {params:p, gen:this.state.gen, eqBands:this._eqPersist(this.eqBands), eqSel:this.eqSel}; }
+  applySnapshot(s){ if(!s)return; this._mutTok++; if(s.params)this._paramIds().forEach(id=>{ if(s.params[id]!==undefined)this.P[id]=s.params[id]; }); if(s.eqBands)this.eqBands=this._eqPersist(s.eqBands); this.eqSel=Math.max(0,Math.min(s.eqSel!==undefined?s.eqSel:this.eqSel,Math.max(0,this.eqBands.length-1))); this.setState(s.gen?{gen:s.gen}:{}); }
   pushUndo(before){ this.undoStack.push(before); if(this.undoStack.length>this.UNDO_MAX)this.undoStack.shift(); this.redoStack.length=0; }
   pushUndoIfChanged(before){ if(!before)return; if(JSON.stringify(before)===JSON.stringify(this.snapshot()))return; this.pushUndo(before); this.setState({}); }
   undo(){ if(!this.undoStack.length)return; this.redoStack.push(this.snapshot()); this.applySnapshot(this.undoStack.pop()); }
@@ -709,7 +711,7 @@ class Component extends DCLogic {
   // --- Phase 0: presets -----------------------------------------------------
   _clampParam(id,v){ const m=this._pmeta(id); if(!m)return v; if(typeof v!=='number'||!isFinite(v))return this.P[id]; v=Math.max(m.min,Math.min(m.max,v)); if(m.step>=1)v=Math.round(v/m.step)*m.step; return v; }
   _defaultParams(){ const p={master:0.5,fmSync:false,fmDivision:6,eqMix:1,eqOut:0,lfoSync:false,lfoDivision:6,morphSync:false,morphDivision:6,rotXSync:false,rotXDivision:6,rotYSync:false,rotYDivision:6,rotZSync:false,rotZDivision:6}; this.CTLS.forEach(c=>{ p[c[1]]=c[6]; }); return p; }
-  _curBank(){ return (this.banks[this.curBankKey]||[]).filter(p=>p&&(p.synth||p.params)); } // hide EQ-only presets until the Phase 2 EQ exists
+  _curBank(){ return (this.banks[this.curBankKey]||[]).filter(p=>p&&(p.synth||p.params||(p.eq&&Array.isArray(p.eq.bands)))); }
   applyPreset(p,record){
     if(!p)return;
     this._mutTok++; // cancel any in-flight MUTATE animation
@@ -735,23 +737,37 @@ class Component extends DCLogic {
       });
       this._loadedEq=p.eq||null;
     } else { this._loadedEq=p.eq||null; }
-    if(p.eq&&Array.isArray(p.eq.bands)){ this.eqBands=p.eq.bands.map(b=>({type:b.type||'bell',freqHz:+b.freqHz||1000,gainDb:+b.gainDb||0,q:+b.q||1,on:b.on!==false,dyn:Object.assign({on:false,mode:'down',threshDb:-24,ratio:2,rangeDb:0,attackMs:10,releaseMs:120},b.dyn||{})})); this.eqSel=Math.max(0,Math.min(this.eqSel,this.eqBands.length-1)); if(typeof p.eq.mix==='number')this.P.eqMix=Math.max(0,Math.min(1,p.eq.mix>1?p.eq.mix/100:p.eq.mix)); if(typeof p.eq.outDb==='number')this.P.eqOut=Math.max(-24,Math.min(24,p.eq.outDb)); }
-    const after={params:{},gen:gen}; this._paramIds().forEach(id=>{ after.params[id]=this.P[id]; });
+    if(p.eq&&Array.isArray(p.eq.bands)){
+      // Direction normalization: dyn.mode is the ONLY direction source; legacy sign-encoded
+      // rangeDb is folded in on load (missing mode -> 'down', the historical default).
+      this.eqBands=this._eqNormalize(p.eq.bands.map(b=>{ const dyn=Object.assign({on:false,mode:'',threshDb:-24,ratio:2,rangeDb:0,attackMs:10,releaseMs:120},b.dyn||{}); if(!dyn.mode)dyn.mode='down'; dyn.rangeDb=Math.abs(+dyn.rangeDb||0); return {type:b.type||'bell',freqHz:+b.freqHz||1000,gainDb:+b.gainDb||0,q:+b.q||1,on:b.on!==false,slopeDbOct:+b.slopeDbOct||12,muted:!!b.muted,soloed:!!b.soloed,dyn}; }));
+      this.eqSel=Math.max(0,Math.min(this.eqSel,this.eqBands.length-1));
+      if(typeof p.eq.mix==='number')this.P.eqMix=Math.max(0,Math.min(1,p.eq.mix>1?p.eq.mix/100:p.eq.mix)); if(typeof p.eq.outDb==='number')this.P.eqOut=Math.max(-24,Math.min(24,p.eq.outDb));
+    }
+    this.state.gen=gen; const after=this.snapshot();
     if(record!==false && JSON.stringify(before)!==JSON.stringify(after))this.pushUndo(before);
     this.setState({gen});
     this._loadedName=p.name||''; this._loadedSnap=after;
   }
-  resetToDefault(){ this.presetIdx=-1; this.applyPreset({name:'Init', params:this._defaultParams(), gen:this.GENS[0][0]}); }
-  savePreset(name){ const snap=this.snapshot(); const preset={name:name,v:1,gen:snap.gen,params:snap.params,eq:{mix:this.P.eqMix,outDb:this.P.eqOut,bands:this.eqBands.map(b=>({type:b.type,freqHz:b.freqHz,gainDb:b.gainDb,q:b.q,on:b.on,dyn:Object.assign({},b.dyn)}))}}; this.banks.user.push(preset); this.curBankKey='user'; this.presetIdx=this.banks.user.length-1; this._loadedName=name; this._loadedSnap=snap; this._persistUser(); this.setState({}); }
+  resetToDefault(){ this.presetIdx=-1; this.applyPreset({name:'Init', params:this._defaultParams(), gen:this.GENS[0][0], eq:{bands:[],mix:1,outDb:0}}); }
+  savePreset(name){ const snap=this.snapshot(); const preset={name:name,v:1,gen:snap.gen,params:snap.params,eq:{mix:this.P.eqMix,outDb:this.P.eqOut,bands:this._eqPersist(this.eqBands)}}; this.banks.user.push(preset); this.curBankKey='user'; this.presetIdx=this.banks.user.length-1; this._loadedName=name; this._loadedSnap=snap; this._persistUser(); this.setState({}); }
   _persistUser(){ try{ localStorage.setItem('synesthesia_presets_v1', JSON.stringify(this.banks.user)); return true; }catch(e){ console.warn('Synesthesia: user presets could not be saved to localStorage (in-memory only this session):', e); return false; } }
   navPreset(dir){ const bank=this._curBank(); if(!bank.length)return; let i=this.presetIdx; i=(i<0?(dir>0?0:bank.length-1):i+dir); i=((i%bank.length)+bank.length)%bank.length; this.presetIdx=i; this.applyPreset(bank[i]); }
   pickPreset(gi){ const bank=this._curBank(); if(gi>=0&&gi<bank.length){ this.presetIdx=gi; this.applyPreset(bank[gi]); } this.setState({presetOpen:false}); }
   divDown(e,divKey){ e.preventDefault(); this._mutTok++; const el=e.currentTarget; el.setPointerCapture(e.pointerId); const sy=e.clientY, si=this.P[divKey]|0; const before=this.snapshot(); const move=ev=>{ const ni=Math.max(0,Math.min(this.FM_DIVS.length-1,Math.round(si+(sy-ev.clientY)/18))); if(ni!==(this.P[divKey]|0)){ this.P[divKey]=ni; this.setState({}); } }; const up=()=>{ this.pushUndoIfChanged(before); el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); }; el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up); }
   toggleSync(key){ const before=this.snapshot(); this.P[key]=!this.P[key]; this.pushUndo(before); this.setState({}); }
   // --- Phase 2: EQ (RBJ biquads + per-block dynamics) -----------------------
-  _eqDefaultBands(){ const d=()=>({on:false,mode:'down',threshDb:-24,ratio:2,rangeDb:0,attackMs:10,releaseMs:120}); return [
-    {type:'bell',freqHz:120,gainDb:0,q:1,on:true,dyn:d()},{type:'bell',freqHz:500,gainDb:0,q:1,on:true,dyn:d()},
-    {type:'bell',freqHz:2000,gainDb:0,q:1.2,on:true,dyn:d()},{type:'bell',freqHz:6000,gainDb:0,q:1,on:true,dyn:d()} ]; }
+  _eqDefaultBands(){ return this._eqNormalize([]); } // locked default: empty EQ — just the two fixed end slots, off
+  _eqDynDefault(){ return {on:false,mode:'down',threshDb:-24,ratio:2,rangeDb:0,attackMs:10,releaseMs:120}; }
+  _eqNormalize(list){
+    // Fixed end slots: adopt the OUTERMOST low-cut / high-cut as ends (never drop extra cut
+    // bands — they stay ordinary middle bands); append disabled defaults when a side is missing.
+    const bands=list.slice(); let lo=-1,hi=-1;
+    bands.forEach((b,i)=>{ b.end=undefined; if(b.type==='low-cut'&&(lo<0||b.freqHz<bands[lo].freqHz))lo=i; if(b.type==='high-cut'&&(hi<0||b.freqHz>bands[hi].freqHz))hi=i; });
+    if(lo>=0)bands[lo].end='lo'; else bands.unshift({type:'low-cut',freqHz:20,gainDb:0,q:0.71,on:false,slopeDbOct:12,muted:false,soloed:false,end:'lo',dyn:this._eqDynDefault()});
+    if(hi>=0)bands[hi].end='hi'; else bands.push({type:'high-cut',freqHz:20000,gainDb:0,q:0.71,on:false,slopeDbOct:12,muted:false,soloed:false,end:'hi',dyn:this._eqDynDefault()});
+    let mid=0; return bands.filter(b=>b.end?true:(++mid<=this.EQ_MAX_MID));
+  }
   _eqCoeffs(type,f,gainDb,q,sr){
     const w0=2*Math.PI*Math.max(10,Math.min(sr*0.49,f))/sr, cw=Math.cos(w0), sw=Math.sin(w0);
     const A=Math.pow(10,gainDb/40); q=Math.max(0.1,q); const alpha=sw/(2*q);
@@ -787,7 +803,14 @@ class Component extends DCLogic {
       bd._c=this._eqCoeffs(bd.type,bd.freqHz,g,bd.q,sr); bd._geff=g;
     }
   }
-  _eqAdd(f,g){ this.eqBands.push({type:'bell',freqHz:Math.max(20,Math.min(20000,f||1000)),gainDb:Math.max(-12,Math.min(12,g||0)),q:1,on:true,dyn:{on:false,mode:'down',threshDb:-24,ratio:2,rangeDb:0,attackMs:10,releaseMs:120}}); this.eqSel=this.eqBands.length-1; this.setState({}); }
+  _eqAdd(f,g){
+    if(this.eqBands.filter(b=>!b.end).length>=this.EQ_MAX_MID)return; // locked cap: 12 middle bands + 2 ends
+    const before=this.snapshot();
+    const nb={type:'bell',freqHz:Math.max(20,Math.min(20000,f||1000)),gainDb:Math.max(-12,Math.min(12,g||0)),q:1,on:true,slopeDbOct:12,muted:false,soloed:false,dyn:this._eqDynDefault()};
+    const hiIdx=this.eqBands.findIndex(b=>b.end==='hi');
+    if(hiIdx>=0)this.eqBands.splice(hiIdx,0,nb); else this.eqBands.push(nb);
+    this.eqSel=this.eqBands.indexOf(nb); this.pushUndoIfChanged(before); this.setState({});
+  }
   eqDown(e){
     if(this.state.scopeMode!=='analyzer')return;
     const cv=e.currentTarget, rect=cv.getBoundingClientRect();
@@ -798,18 +821,22 @@ class Component extends DCLogic {
     let hit=-1,best=15; for(let i=0;i<this.eqBands.length;i++){ const b=this.eqBands[i]; const dx=px-f2x(b.freqHz),dy=py-g2y(b.gainDb); const d=Math.hypot(dx,dy); if(d<best){best=d;hit=i;} }
     if(hit<0){ const now=performance.now(); if(this._lastEqClick&&now-this._lastEqClick<350){ this._lastEqClick=0; this._eqAdd(x2f(px),y2g(py)); } else this._lastEqClick=now; return; }
     e.preventDefault(); this.eqSel=hit; this.setState({}); const b=this.eqBands[hit]; cv.setPointerCapture(e.pointerId);
+    const before=this.snapshot();
     const move=ev=>{ const mx=ev.clientX-rect.left,my=ev.clientY-rect.top; b.freqHz=Math.max(16,Math.min(21000,x2f(mx))); b.gainDb=Math.max(-18,Math.min(18,y2g(my))); this.setState({}); };
-    const up=ev=>{ const my=ev.clientY-rect.top; if(my>rect.height+22&&this.eqBands.length>1){ this.eqBands.splice(hit,1); this.eqSel=Math.max(0,Math.min(this.eqSel,this.eqBands.length-1)); } this.setState({}); cv.removeEventListener('pointermove',move); cv.removeEventListener('pointerup',up); cv.removeEventListener('lostpointercapture',up); };
+    const up=ev=>{ const my=ev.clientY-rect.top; if(my>rect.height+22&&!b.end&&this.eqBands.length>1){ this.eqBands.splice(hit,1); this.eqSel=Math.max(0,Math.min(this.eqSel,this.eqBands.length-1)); } this.pushUndoIfChanged(before); this.setState({}); cv.removeEventListener('pointermove',move); cv.removeEventListener('pointerup',up); cv.removeEventListener('lostpointercapture',up); };
     cv.addEventListener('pointermove',move); cv.addEventListener('pointerup',up); cv.addEventListener('lostpointercapture',up);
   }
-  eqWheel(e){ if(this.state.scopeMode!=='analyzer')return; const b=this.eqBands[this.eqSel]; if(!b)return; e.preventDefault(); b.q=Math.max(0.3,Math.min(30,b.q*Math.pow(1.0015,-e.deltaY))); this.setState({}); }
-  eqChipDown(e,tgt,key,min,max,step){ e.preventDefault(); const el=e.currentTarget; el.setPointerCapture(e.pointerId); const sy=e.clientY; const obj=tgt==='band'?this.eqBands[this.eqSel]:(tgt==='dyn'?(this.eqBands[this.eqSel]||{}).dyn:this.P); if(!obj)return; const sv=obj[key];
-    const move=ev=>{ let nv=sv+(sy-ev.clientY)/150*(max-min); nv=Math.max(min,Math.min(max,nv)); if(step>=1)nv=Math.round(nv/step)*step; obj[key]=nv; this.setState({}); };
-    const up=()=>{ el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); };
+  _eqGesture(){ // debounced gesture bracket for wheel/nudge bursts: first event snapshots, 400 ms silence closes the step
+    if(!this._eqWhB)this._eqWhB=this.snapshot(); clearTimeout(this._eqWhT);
+    this._eqWhT=setTimeout(()=>{ this.pushUndoIfChanged(this._eqWhB); this._eqWhB=null; },400); }
+  eqWheel(e){ if(this.state.scopeMode!=='analyzer')return; const b=this.eqBands[this.eqSel]; if(!b)return; e.preventDefault(); this._eqGesture(); b.q=Math.max(0.3,Math.min(30,b.q*Math.pow(1.0015,-e.deltaY))); this.setState({}); }
+  eqChipDown(e,tgt,key,min,max,step){ e.preventDefault(); const el=e.currentTarget; el.setPointerCapture(e.pointerId); const sy=e.clientY; const obj=tgt==='band'?this.eqBands[this.eqSel]:(tgt==='dyn'?(this.eqBands[this.eqSel]||{}).dyn:this.P); if(!obj)return; const sv=obj[key]; const before=this.snapshot();
+    const move=ev=>{ let nv=sv+(sy-ev.clientY)/150*(max-min)*(ev.shiftKey?0.15:1); nv=Math.max(min,Math.min(max,nv)); if(step>=1)nv=Math.round(nv/step)*step; obj[key]=nv; this.setState({}); };
+    const up=()=>{ this.pushUndoIfChanged(before); el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); };
     el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up); }
-  eqCycleType(){ const b=this.eqBands[this.eqSel]; if(!b)return; const i=this.EQ_TYPES.indexOf(b.type); b.type=this.EQ_TYPES[(i+1)%this.EQ_TYPES.length]; this.setState({}); }
-  eqToggleBandOn(){ const b=this.eqBands[this.eqSel]; if(b){ b.on=!b.on; this.setState({}); } }
-  eqToggleDyn(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ b.dyn.on=!b.dyn.on; this.setState({}); } }
+  eqCycleType(){ const b=this.eqBands[this.eqSel]; if(!b||b.end)return; const before=this.snapshot(); const i=this.EQ_TYPES.indexOf(b.type); b.type=this.EQ_TYPES[(i+1)%this.EQ_TYPES.length]; this.pushUndoIfChanged(before); this.setState({}); }
+  eqToggleBandOn(){ const b=this.eqBands[this.eqSel]; if(b){ const before=this.snapshot(); b.on=!b.on; this.pushUndoIfChanged(before); this.setState({}); } }
+  eqToggleDyn(){ const b=this.eqBands[this.eqSel]; if(b&&b.dyn){ const before=this.snapshot(); b.dyn.on=!b.dyn.on; this.pushUndoIfChanged(before); this.setState({}); } }
   _faustDsp(){
     const P=this.P, all=this.eqBands||[], act=all.filter(b=>b.on);
     const n=v=>{ const s=String(+(+v).toFixed(6)); return (s.indexOf('.')>=0||s.indexOf('e')>=0)?s:s+'.0'; };
@@ -923,6 +950,8 @@ class Component extends DCLogic {
   }
   mutate(){
     const rnd=(a,b)=>a+Math.random()*(b-a);
+    // Locked scope (interview-2): MUTATE randomizes SYNTH params only — never eqBands/eqMix/eqOut.
+    // Keep this key list free of EQ ids.
     const target={
       xHarm:rnd(0.5,9),yHarm:rnd(0.5,9),zHarm:rnd(0,5),morph:rnd(0.15,0.95),
       rotX:rnd(-0.9,0.9),rotY:rnd(-0.9,0.9),rotZ:rnd(-0.9,0.9),
@@ -1064,7 +1093,7 @@ class Component extends DCLogic {
     // categorized preset dropdown (feature 1): group the current bank by category, FL-Studio style
     const _itemStyle=active=>({padding:'4px 10px',borderRadius:'3px',cursor:'pointer',font:"500 8.5px 'IBM Plex Mono',monospace",color:active?'#ffce7a':'#e8dcc0',background:active?'rgba(255,180,60,.16)':'transparent',whiteSpace:'nowrap'});
     const _groups={},_order=[];
-    _bankArr.forEach((p,gi)=>{ const c=(p.category||p.styleRef||'Presets'); if(!_groups[c]){_groups[c]=[];_order.push(c);} _groups[c].push({name:(p.name||('#'+(gi+1))), style:_itemStyle(gi===this.presetIdx), pick:()=>this.pickPreset(gi)}); });
+    _bankArr.forEach((p,gi)=>{ const c=(p.category||p.styleRef||'Presets'); if(!_groups[c]){_groups[c]=[];_order.push(c);} _groups[c].push({name:((!p.synth&&!p.params&&p.eq)?'[EQ] ':'')+(p.name||('#'+(gi+1))), style:_itemStyle(gi===this.presetIdx), pick:()=>this.pickPreset(gi)}); });
     const presetMenu=_order.map(c=>({cat:c, items:_groups[c]}));
     const presetBtn={padding:'5px 10px',borderRadius:'4px',cursor:'pointer',font:"600 8px 'IBM Plex Mono',monospace",letterSpacing:'.1em',color:'#3b382f',background:'linear-gradient(180deg,#efe9d8,#cfc9b6)',border:'1px solid #8f8a77',boxShadow:'0 2px 3px rgba(0,0,0,.3)',userSelect:'none'};
     const navBtn=Object.assign({},presetBtn,{padding:'5px 9px'});
