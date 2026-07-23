@@ -75,31 +75,52 @@ Playing a 2048-sample cycle at a high note asks for harmonics above Nyquist. Unt
 audible grit and a visibly ragged beam — on this instrument the aliasing is on screen too, so the visual and
 audio requirements point the same way.
 
-Standard, portable solution — build it once at import, not per sample:
-1. Real FFT each frame (2048 points).
-2. For mip level `k` (k = 0…10), zero every bin above `Nyquist / 2^k`, IFFT back to a band-limited frame of
-   length `2048 / 2^k`.
-3. At playback pick `k` from the voice's current increment (cycles/sample) so the top retained harmonic
-   stays under Nyquist; **crossfade between adjacent levels** across a note glide so mip switching is
-   inaudible.
-4. Interpolate within a frame (Catmull-Rom or linear — linear is fine at 2048, measure it).
+Standard, portable solution — build it once at import, not per sample. This is a PORT SPEC, so the
+contract is exact and parametric in the table's real `frameSize` N (256…8192), never hard-coded to 2048:
+1. Real FFT each frame (N points). **Normalization contract:** forward unscaled, inverse scaled by `1/N`
+   (document it in the code — the C++ port must match bit-for-bit within tolerance).
+2. Level `k` has frame length `Nk = N >> k`, for k = 0 … log2(N/8) (deepest frame = 8 samples). Retain
+   harmonics `1 … floor(Nk/2) - 1`; **zero DC and the Nyquist bin at every level including level 0.**
+   Level 0 therefore equals the original *minus DC and Nyquist* — the level-0 test asserts exactly that,
+   not raw equality (a table with DC offset is corrected at import, by design, and the import summary says
+   so).
+3. At playback derive a **fractional LOD** from the sampler's actual per-sample phase increment:
+   `lod = clamp(log2(max(1, Nk_base * phaseInc)), 0, L-1)`; render adjacent integer levels and crossfade by
+   the fraction (no hard switching, so no hysteresis machinery — one smoothed per-voice `wtLod` if
+   measurement shows jitter).
+4. Interpolate within a frame: linear in v1, with a cubic (Catmull-Rom) switch behind a flag — the
+   trilinear stack (intra-frame × inter-frame × inter-LOD) can audibly dull bright low-octave tables, and
+   the flag lets the ear test decide.
 
-Cost: 256 frames × one 2048-point FFT ≈ tens of milliseconds at import — do it in a worker so the UI never
-janks. Memory: base 256 × 2048 × 4 B = 2 MB; the whole pyramid sums to ≈ 2× that ≈ 4 MB per stereo table.
-Acceptable, but cap concurrently-loaded tables (start at 1) and document the ceiling.
+Cost: 256 frames × one 2048-point FFT ≈ tens of milliseconds at import — run in a Worker so the UI never
+janks. Memory (corrected): a mono 256×2048 float base is 2 MiB and its pyramid ≈ 4 MiB; **stereo doubles
+that ≈ 8 MiB per table.** Cap concurrently-loaded tables (start: 2, the worklet cache size) and surface the
+ceiling in the UI.
 
 ### W3 — The oscillator: an 11th generator
 - New `gen: 'wavetable'`, added to `GENS` with its own description, so it flows through the existing
   generator select, presets, undo and MUTATE machinery untouched.
 - `shape(v, finc)` for this generator reads the table instead of evaluating a formula:
-  - **Mono table:** `x = table(pos, v.px)`, `y = table(pos, v.px + P.phOff)` — this *reuses the existing
-    ST PHASE knob* as the X/Y phase offset, which is exactly how `lissajous` already builds a figure.
-  - **Stereo table:** `x = tableL(pos, v.px)`, `y = tableR(pos, v.px)` — the beam is drawn directly.
-  - `z` = 0 for v1 (the 3-D rotation stage still applies to the X/Y plane, so ROT X/Y/Z keep working).
-- **`pos` (wavetable position) is MORPH.** No new parameter: MORPH already means "walk the shape family,"
-  it is already automatable/undoable/preset-carried, and it already has tempo-sync (`morphSync`) — so a
-  synced wavetable sweep works on day one. Frame interpolation honours the `clm ` interpolation flag
-  (none = hard step, linear = crossfade; spectral modes fall back to linear in v1, documented).
+  - **A dedicated per-voice phase `v.wtPh`** (init in the voice constructor + `noteOn`, floor-wrapped),
+    advanced by the BASE increment `f/sr`. Do NOT reuse `v.px`: it advances by `f·xHarm·(1+det)/sr`
+    (dc.html:450), which would silently turn X HARM into a wavetable pitch multiplier and ignore Y HARM.
+    X/Y HARM are meaningless for a sampled table and stay inert on this generator (documented in its
+    description).
+  - **Mono table:** `x = table(pos, v.wtPh)`, `y = table(pos, v.wtPh + P.phOff)` — ST PHASE builds the
+    figure exactly as `lissajous` does.
+  - **Stereo table:** `x = tableL(pos, v.wtPh)`, `y = tableR(pos, v.wtPh)` — the beam drawn directly.
+    **Normalization is GLOBAL over both channels and all frames** (one scale factor per table) — per-channel
+    or per-frame normalization would change the imported geometry. Note also (documented, accepted): the
+    beam taps before the output tanh/width stage (dc.html:475-478), so heavy drive/width makes the audio
+    differ from the drawn figure — same as every other generator.
+  - `z` = 0 for v1 (the 3-D rotation stage still applies, so ROT X/Y/Z keep working).
+- **`pos` (wavetable position) is MORPH.** No new parameter: MORPH is already automatable/undoable/preset-
+  carried and tempo-synced (`morphSync`), so a synced sweep works on day one. Mapping per the table's
+  `clm ` interp flag: crossfade modes → `pos = m·(frames-1)`, adjacent-frame crossfade, clamped endpoints;
+  **interp = 0 (hard step) → `frame = min(frames-1, floor(m·frames))`** so every frame including the last
+  is reachable across the MORPH travel (with `pos = m·(frames-1)` + floor, the last frame only appears at
+  exactly m = 1). Spectral modes (2-4) fall back to linear in v1, documented. Degenerate cases (1-frame,
+  2-frame tables, the morphSync triangle hitting both endpoints) get explicit tests.
 - Everything downstream — SVF, fold/drive, jitter, width, the whole EQ, the beam tap — is untouched.
 
 ### W4 — Storage + transport (the boring part that must not be skipped)
@@ -107,9 +128,18 @@ Acceptable, but cap concurrently-loaded tables (start at 1) and document the cei
   worklet.
 - **Storage:** IndexedDB, keyed by a content hash (SHA-256 of the sample data), with the display name and
   `clm ` metadata alongside. Deduplicates re-imports for free.
-- **Presets** reference a table by `{hash, name, frames, frameSize}` — never inline the audio. Loading a
-  patch whose table is missing must degrade loudly and gracefully: keep the patch, show "table not found —
-  re-import <name>", fall back to a built-in default table rather than silence.
+- **Presets** reference a table by hash — never inline the audio. **The hash is canonical and defined:**
+  SHA-256 over the POST-repair samples as little-endian Float32 bytes, followed by `frameSize`, `frames`,
+  `channels`, `interp` as little-endian u32s. The preset reference carries `{hash, name, frames, frameSize,
+  channels, interp, trimDb}` so playback semantics survive even before the data resolves.
+- **One table-availability state machine (all hosts, no contradictions):**
+  `builtin` (the generated default table, ALWAYS preloaded in every core — page, worklet, SPN — before the
+  generator is selectable) → `pending` (a preset referenced an external hash; lookup/transport in flight;
+  the generator RENDERS THE BUILT-IN meanwhile — never silence, never garbage) → `ready` (external table
+  cached; sampler switches at a block boundary) or `missing` (lookup settled negative: inline warning
+  "table not found — re-import <name>" in the preset bar, generator stays on the built-in). The earlier
+  drafts said "silence" in one place and "fallback" in another — silence is WRONG; the built-in fallback is
+  the rule everywhere.
 - **Worklet transport:** ship the mip pyramid as a **transferable `ArrayBuffer`** in its own message
   (`{t:'wavetable', hash, layout, buffer}`), *not* through `_pushPatch`'s JSON. The patch carries only the
   hash; the processor keeps a small table cache keyed by hash and ignores a patch referencing a table it has
