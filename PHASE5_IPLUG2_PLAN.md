@@ -40,12 +40,24 @@ agent-authored, untested-by-ear presets) ships hidden/optional — factory = the
    **double-buffered immutable snapshot at block boundaries** (write to the inactive snapshot, atomic
    index flip — never mutate a snapshot the audio thread may read). No UI→host→DSP round-trips for local
    drawing. No allocation/locks/syscalls in `ProcessBlock`.
-3. **Cross-language golden test** (Phase 1 harness is the prerequisite): same seeds, same event scripts,
+3. **Host-anchored tempo sync** (codex-5.5): the browser SYNC mode is deliberately FREE-RUNNING — it derives
+   a rate from BPM and never locks phase to song position. In the plugin, when the host transport position is
+   valid, synced motions should default to **PPQ-anchored phase** (`phase = frac((ppqAtBlock + beatInc*i) /
+   beatsPerCycle + offset)`) so a synced FM/LFO lands on the grid after a locate. Keep a Serum-style
+   free/anchor switch: anchoring makes phase jump on tempo/rate edits, which is musically contentious.
+   Free-run remains the standalone behavior.
+4. **Cross-language golden test** (Phase 1 harness is the prerequisite): same seeds, same event scripts,
    preset matrix; C++ CLI target renders raw blocks; compare vs JS `SynthCore` — RMS AND max-abs
    per-sample < 1e-6, at **44.1k / 48k / 96k** and across different block partitions (absolute counters
    make partitioning exact).
 
 ### P2 — Parameters, state, undo, presets
+0. **Factor the descriptor as `ParamSpec` + `Shape`** (codex-5.5, 2026-07-23): the browser `_pdesc` table
+   stays the source of truth for real-unit min/max/default/discrete/format — but do NOT treat "what host
+   automation reads" as one concept, because the three targets disagree. VST3 reads/writes **normalized
+   doubles**; CLAP exposes **plain min/max/value doubles** plus `value_to_text`/`text_to_value`; iPlug2 maps
+   through `IParam::Shape`. Ship one `Shape` subclass per skew (`lin`, `log`, `zeroLog`) and let thin
+   adapters serve each format, rather than bending a single mapping to all three.
 1. **Fixed slot model with stable identity**: dedicated LO-CUT and HI-CUT end slots + 12 middle slots.
    A band's slot index IS its automation identity for life — UI display order is separate metadata, and
    insert/delete never renumbers surviving slots (host automation on "Band 3 Freq" must stay attached to
@@ -104,6 +116,14 @@ agent-authored, untested-by-ear presets) ships hidden/optional — factory = the
    variable buffer sizes, DPI scales, GUI open/closed/reopen; VST3 validator + (when CLAP lands)
    `clap-validator` + FL-CLAP (2024.1+) + Bitwig/Reaper; x64 Release CPU profile (headroom at 10 voices ×
    14 bands).
+
+### P6 — C++-only hazards (no browser counterpart)
+- **Denormal suppression** (FTZ/DAZ) around the EQ cascade and envelope tails — JS has no equivalent, so this
+  class of bug is invisible in the reference implementation and must be added fresh in the port.
+- **Sample-rate / block-size changes**: reset and recompute every filter coefficient and easing state in
+  `OnReset` (the browser simply gets a fresh AudioContext instead).
+- **State-chunk sanitization**: the browser now clamps preset EQ band numerics on load; the plugin's chunk
+  reader must do the same — a chunk is untrusted input restored from someone else's project file.
 
 ## Risks
 - **WebView2 bridge bandwidth** for the beam at scope frame rates — measure early (P3b spike with fake

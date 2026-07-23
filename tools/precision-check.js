@@ -41,9 +41,27 @@ ok('traceN snaps to its 64-sample grid', c.fromNorm('traceN', 0.42) % 64 === 0, 
 const bpmField = /<input type="number"[^>]*value="\{\{bpmVal\}\}"/.exec(html);
 ok('BPM input exists', !!bpmField);
 ok('BPM input allows decimals (step="any")', /step="any"/.test(bpmField[0]), bpmField[0].match(/step="[^"]*"/)[0]);
-c.bpmChangeTest = (v) => { const p = parseFloat(v); return Math.round(Math.max(20, Math.min(300, p)) * 1000) / 1000; };
+// mirror the live handler: clamp only, never round the canonical value
+c.bpmChangeTest = (v) => { const p = Number(v); return Math.max(20, Math.min(300, p)); };
 ok('BPM 134.685 survives entry exactly', c.bpmChangeTest('134.685') === 134.685);
-ok('BPM keeps 3 decimals', c.bpmChangeTest('91.5551') === 91.555);
+ok('BPM keeps ALL entered decimals (no canonical rounding)', c.bpmChangeTest('91.5551234') === 91.5551234);
+ok('BPM still clamps to the legal range', c.bpmChangeTest('9999') === 300 && c.bpmChangeTest('1') === 20);
+
+// --- 3b. canonical BPM is NOT rounded (rounding state would be the same premature discard) -----
+ok('BPM state keeps full precision (no 3-decimal rounding of the canonical value)',
+   !/bpm:Math\.round\(/.test(html), 'bpmChange must store the clamped double');
+
+// --- 3c. zeroLog skew: exact endpoints + log-like ABOVE the knee (pow(gamma) is not) ------------
+{
+  const d = c._pdesc('fmRate');
+  ok('fmRate uses the zeroLog skew', d.skew === 'zeroLog', d.skew);
+  ok('zeroLog hits 0 and max exactly', c.fromNorm('fmRate', 0) === 0 && Math.abs(c.fromNorm('fmRate', 1) - 40) < 1e-12);
+  // above the knee, equal normalized travel should give near-equal RATIO
+  const a = c.fromNorm('fmRate', 0.7) / c.fromNorm('fmRate', 0.6);
+  const b = c.fromNorm('fmRate', 0.8) / c.fromNorm('fmRate', 0.7);
+  ok('zeroLog is ratio-like above the knee', Math.abs(a - b) / a < 0.05, `ratios ${a.toFixed(4)} vs ${b.toFixed(4)}`);
+  ok('zeroLog round-trips', Math.abs(c.fromNorm('fmRate', c.toNorm('fmRate', 7.3197)) - 7.3197) < 1e-9);
+}
 
 // --- 4. SYNC mode derives Hz from BPM in full precision (the thing that actually holds sync) ---
 // Re-derive the engine's own formula from the live FM_DIVS table and compare against the core.
@@ -76,7 +94,7 @@ ok('cutoff survives the worklet patch exactly', patch.P.cutoff === c.P.cutoff, S
 // Two rates 0.001 Hz apart must diverge measurably over 60 s — proves nothing upstream rounded them.
 function phaseAfter(rateHz, seconds, sr = 48000) {
   let ph = 0; const n = Math.round(seconds * sr);
-  for (let i = 0; i < n; i++) { ph += rateHz / sr; if (ph >= 1) ph -= 1; }
+  for (let i = 0; i < n; i++) { const x = ph + rateHz / sr; ph = x - Math.floor(x); } // mirrors the engine's floor-wrap
   return ph;
 }
 const pA = phaseAfter(8.979, 60), pB = phaseAfter(8.980, 60);
@@ -86,6 +104,37 @@ ok('a 0.001 Hz difference is resolvable in the phase accumulator', Math.abs(pA -
 const relChip = /_chip\('REL',.*?'dyn','releaseMs',([\d.]+),([\d.]+),([\d.]+)\)/.exec(html);
 ok('REL chip still declares a 5 ms nudge granularity', !!relChip && relChip[3] === '5', relChip ? relChip[0].slice(-30) : 'not found');
 ok('chip drag no longer rounds to the step grid', !/if\(step>=1\)nv=Math\.round\(nv\/step\)\*step/.test(html));
+
+// --- 7b. phase wrap is exact for ANY increment (a single subtract cannot wrap >= 2 cycles) -----
+{
+  const wrap = (x) => x - Math.floor(x);
+  const single = (x) => x >= 1 ? x - 1 : x;
+  // worst realistic voice increment: high note x drawSpd 8 x fm x xHarm 16
+  const inc = 4186 * 8 * 1.5 * 16 * 1.03 / 48000;
+  let pw = 0, ps = 0;
+  for (let i = 0; i < 48000; i++) { pw = wrap(pw + inc); ps = single(ps + inc); }
+  ok('floor-wrap stays bounded in [0,1) at extreme increments', pw >= 0 && pw < 1, 'phase=' + pw.toFixed(6));
+  ok('the old single-subtract would have run away (regression guard)', ps > 1000, 'would reach ' + ps.toExponential(2));
+  ok('engine uses floor-wrap, not single-subtract, for phase',
+     /_wrap01\(x\)\{ return x-Math\.floor\(x\); \}/.test(html) && !/if\(this\.fmPh>=1\)/.test(html));
+}
+
+// --- 7c. preset EQ bands are numerically sanitized on load -------------------------------------
+{
+  const hostile = { name: 'hostile', gen: 'lissajous', params: {},
+    eq: { mix: 5, outDb: 999, bands: [ { type: 'not-a-type', freqHz: 9e9, gainDb: 400, q: -3, slopeDbOct: 7,
+      dyn: { on: true, mode: 'down', threshDb: -999, ratio: 1e6, rangeDb: -50, attackMs: 0, releaseMs: 1e9 } } ] } };
+  const victim = new Component({});
+  victim.applyPreset(hostile);
+  const b = victim.eqBands.find(x => !x.end) || victim.eqBands[0];
+  const inRange = (v, lo, hi) => v >= lo && v <= hi;
+  ok('hostile preset: band type falls back to a known type', victim.EQ_TYPES.indexOf(b.type) >= 0, b.type);
+  ok('hostile preset: freq/gain/Q clamped', inRange(b.freqHz, 10, 22000) && inRange(b.gainDb, -18, 18) && inRange(b.q, 0.1, 30),
+     `${b.freqHz} ${b.gainDb} ${b.q}`);
+  ok('hostile preset: slope falls back to a legal value', [12, 24, 48, 96].indexOf(b.slopeDbOct) >= 0, String(b.slopeDbOct));
+  ok('hostile preset: dyn times/ratio clamped', inRange(b.dyn.ratio, 1, 20) && inRange(b.dyn.attackMs, 0.5, 500) && inRange(b.dyn.releaseMs, 5, 5000) && inRange(b.dyn.rangeDb, 0, 18));
+  ok('hostile preset: mix/out clamped', inRange(victim.P.eqMix, 0, 1) && inRange(victim.P.eqOut, -24, 24), `${victim.P.eqMix} ${victim.P.eqOut}`);
+}
 
 // --- 8. no value-path quantizer keyed on step>=1 remains ---------------------------------------
 const script = m[1];
