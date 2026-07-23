@@ -13,6 +13,7 @@ Install deps once in this directory: `npm i` (playwright-core + @grame/faustwasm
 | `block-equiv.js <html>` | `SynthCore` rendered in 2048-blocks vs 128-blocks is bit-identical (absolute-counter cadences are host-block independent). |
 | `worklet-equiv.js <html>` | The REAL worklet module source + REAL message protocol in a fake `AudioWorkletGlobalScope` vs the ScriptProcessor path: bit-identical audio and beam (X and Y), plus pool-starvation backpressure (chunks drop, audio survives). |
 | `param-model-check.js [html]` | Parameter model: descriptor coverage, real↔normalized round-trip, log/pow skew shape, discrete choices, formatting; A/B compare semantics; preset export → loader round-trip. |
+| `precision-check.js [html]` | No premature quantization: continuous params (Hz, times, gains) keep full double precision through `_clampParam`/`fromNorm`/chip drags; only enumerated params snap; BPM accepts decimals; every tempo division is exact at a fractional BPM; values survive the worklet patch hop bit-for-bit; a 0.001 Hz difference is resolvable in the phase accumulator. |
 | `gen-dsp.js <html> <out.dsp>` + `parity-check.mjs [html]` | FAUST export: worst-case band sets (all types, slopes 24/48/96, tilt, depth notch, mute/solo, empty, solo-only) compile under faustwasm, and the emitted DSP matches the live engine numerically in double precision. |
 
 Typical full sweep:

@@ -93,7 +93,7 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
     <sc-for list="{{syncBtns}}" as="sb" hint-placeholder-count="6"><div onClick="{{sb.toggle}}" title="Sync this motion cycle to the tempo — its knob becomes a note-division selector" style="{{sb.style}}">{{sb.label}}</div></sc-for>
     <div style="width:1px;height:20px;background:#a49e8c;margin:0 2px"></div>
     <div style="font:600 7.5px 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#4a463a">BPM</div>
-    <input type="number" min="20" max="300" step="1" value="{{bpmVal}}" onInput="{{bpmChange}}" title="Manual BPM (used when no MIDI is playing)" style="width:56px;padding:5px 6px;border-radius:4px;border:1px solid #8f8a77;background:#17160f;color:#ffb454;font:500 8.5px 'IBM Plex Mono',monospace;outline:none;text-align:center">
+    <input type="number" min="20" max="300" step="any" inputmode="decimal" value="{{bpmVal}}" onInput="{{bpmChange}}" title="Manual BPM (used when no MIDI is playing)" style="width:56px;padding:5px 6px;border-radius:4px;border:1px solid #8f8a77;background:#17160f;color:#ffb454;font:500 8.5px 'IBM Plex Mono',monospace;outline:none;text-align:center">
     <div style="font:500 7.5px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#8a8574">{{tempoSrcInfo}}</div>
   </div>
 
@@ -488,7 +488,7 @@ class Component extends DCLogic {
     super(props);
     this.TAU = Math.PI*2;
     this.CTLS = [
-      ['sig','baseFreq','DRONE FREQ',20,500,0.01,50, v=>v.toFixed(1)+' Hz'],
+      ['sig','baseFreq','DRONE FREQ',20,500,0.01,50, v=>v.toFixed(3)+' Hz'],
       ['sig','drawSpd','DRAW SPEED',0.1,8,0.001,1.0, v=>v.toFixed(3)+'×'],
       ['sig','phOff','ST PHASE',0,1,0.001,0.25, v=>(v*360).toFixed(0)+'°'],
       ['sig','attack','ATTACK',0.003,2,0.001,0.012, v=>(v*1000).toFixed(0)+' ms'],
@@ -499,11 +499,11 @@ class Component extends DCLogic {
       ['mod','yHarm','Y HARM',0.25,16,0.001,4.0, v=>v.toFixed(3)],
       ['mod','zHarm','Z HARM',0,8,0.001,2.0, v=>v.toFixed(3)],
       ['mod','morph','MORPH',0,1,0.001,0.5, v=>v.toFixed(3)],
-      ['mod','fmRate','FM RATE',0,40,0.01,0, v=>v.toFixed(2)+' Hz'],
+      ['mod','fmRate','FM RATE',0,40,0.01,0, v=>v.toFixed(3)+' Hz'],
       ['mod','fmDepth','FM DEPTH',0,0.5,0.001,0, v=>v.toFixed(3)],
       ['mod','detune','DETUNE',0,1,0.001,0, v=>(v*100).toFixed(0)+'%'],
       ['mod','width','WIDTH',0,1,0.001,0, v=>(v*100).toFixed(0)+'%'],
-      ['lfo','lfoRate','LFO RATE',0.01,20,0.01,2, v=>v.toFixed(2)+' Hz'],
+      ['lfo','lfoRate','LFO RATE',0.01,20,0.01,2, v=>v.toFixed(3)+' Hz'],
       ['lfo','lfoDepth','LFO DEPTH',0,1,0.001,0, v=>(v*100).toFixed(0)+'%'],
       ['lfo','lfoTarget','LFO →',0,4,1,0, v=>['OFF','MORPH','CUTOFF','PITCH','AMP'][v|0]||'OFF'],
       ['rot','rotX','ROT X',-1,1,0.001,-0.55, v=>v.toFixed(3)],
@@ -519,7 +519,7 @@ class Component extends DCLogic {
       ['pho','persist','PERSIST',0,0.97,0.001,0.55, v=>v.toFixed(3)],
       ['pho','beamW','BEAM W',0.5,3,0.01,1.2, v=>v.toFixed(2)+' px'],
       ['pho','traceN','TRACE LEN',256,4096,64,1536, v=>v.toFixed(0)],
-      ['flt','cutoff','CUTOFF',60,18000,1,18000, v=>v>=1000?(v/1000).toFixed(2)+' kHz':v.toFixed(0)+' Hz'],
+      ['flt','cutoff','CUTOFF',60,18000,1,18000, v=>v>=1000?(v/1000).toFixed(3)+' kHz':v.toFixed(1)+' Hz'],
       ['flt','reso','RESONANCE',0,0.96,0.001,0, v=>v.toFixed(2)],
     ];
     this.P = { master:0.5 };
@@ -1022,8 +1022,14 @@ class Component extends DCLogic {
       // frequency-ish params get a ratio-preserving curve: 'log' when min>0, 'pow' (gamma 3) when the
       // range includes 0 — log cannot represent zero, and fmRate/FM depth-style knobs must reach exactly 0.
       const LOGISH={baseFreq:1,fmRate:1,lfoRate:1,cutoff:1};
+      // `step` is a DRAG/NUDGE GRANULARITY HINT — never a value quantizer. Only params that are
+      // genuinely enumerated (an index, a mode, a sample count) snap; everything else keeps full
+      // double precision all the way to the audio thread. Rounding a continuous control here would
+      // throw away resolution that later stages (tempo sync, modulation, the EQ detector) still need.
+      const DISCRETE={lfoTarget:1,traceN:1};
       this.CTLS.forEach(c=>put(c[1],{section:c[0],label:c[2],min:c[3],max:c[4],step:c[5],default:c[6],format:c[7],
-        skew:LOGISH[c[1]]?(c[3]>0?'log':'pow'):'lin', gamma:3}));
+        skew:LOGISH[c[1]]?(c[3]>0?'log':'pow'):'lin', gamma:3,
+        isDiscrete:!!DISCRETE[c[1]], choices:(c[1]==='lfoTarget')?['OFF','MORPH','CUTOFF','PITCH','AMP']:null}));
       put('master',{label:'MASTER',min:0,max:1,step:0.001,default:0.5,unit:'',format:v=>(v*100).toFixed(0)+'%'});
       put('eqMix',{section:'eq',label:'EQ MIX',min:0,max:1,step:0.001,default:1,format:v=>(v*100).toFixed(0)+'%'});
       put('eqOut',{section:'eq',label:'EQ OUT',min:-24,max:24,step:0.1,default:0,unit:'dB',format:v=>v.toFixed(1)+' dB'});
@@ -1053,7 +1059,7 @@ class Component extends DCLogic {
     if(d.skew==='log')v=Math.max(1e-6,lo)*Math.pow(hi/Math.max(1e-6,lo),n);
     else if(d.skew==='pow')v=lo+(hi-lo)*Math.pow(n,d.gamma||3);
     else v=lo+(hi-lo)*n;
-    if(d.step>=1)v=Math.round(v/d.step)*d.step;
+    if(d.isDiscrete&&d.step>0)v=Math.round(v/d.step)*d.step; // enumerated only — continuous stays full precision
     return Math.max(lo,Math.min(hi,v));
   }
   formatParam(id,v){ const d=this._pdesc(id); if(!d)return String(v); try{ return d.format(v); }catch(e){ return String(v); } }
@@ -1066,7 +1072,7 @@ class Component extends DCLogic {
   undo(){ this._eqFlushWheel(); if(!this.undoStack.length)return; this.redoStack.push(this.snapshot()); this.applySnapshot(this.undoStack.pop()); }
   redo(){ this._eqFlushWheel(); if(!this.redoStack.length)return; this.undoStack.push(this.snapshot()); this.applySnapshot(this.redoStack.pop()); }
   // --- Phase 0: presets -----------------------------------------------------
-  _clampParam(id,v){ const m=this._pmeta(id); if(!m)return v; if(typeof v!=='number'||!isFinite(v))return this.P[id]; v=Math.max(m.min,Math.min(m.max,v)); if(m.step>=1)v=Math.round(v/m.step)*m.step; return v; }
+  _clampParam(id,v){ const d=this._pdesc(id); if(!d)return v; if(typeof v!=='number'||!isFinite(v))return this.P[id]; v=Math.max(d.min,Math.min(d.max,v)); if(d.isDiscrete&&d.step>0)v=Math.round(v/d.step)*d.step; return v; }
   _defaultParams(){ const p={master:0.5,fmSync:false,fmDivision:6,eqMix:1,eqOut:0,lfoSync:false,lfoDivision:6,morphSync:false,morphDivision:6,rotXSync:false,rotXDivision:6,rotYSync:false,rotYDivision:6,rotZSync:false,rotZDivision:6}; this.CTLS.forEach(c=>{ p[c[1]]=c[6]; }); return p; }
   _curBank(){ return (this.banks[this.curBankKey]||[]).filter(p=>p&&(p.synth||p.params||(p.eq&&Array.isArray(p.eq.bands)))); }
   applyPreset(p,record){
@@ -1214,7 +1220,7 @@ class Component extends DCLogic {
     if(this._eqWhB){ clearTimeout(this._eqWhT); const b=this._eqWhB; this._eqWhB=null; this.pushUndoIfChanged(b); } }
   eqWheel(e){ if(this.state.scopeMode!=='analyzer')return; const b=this.eqBands[this.eqSel]; if(!b)return; e.preventDefault(); this._eqGesture(); b.q=Math.max(0.3,Math.min(30,b.q*Math.pow(1.0015,-e.deltaY))); this.setState({}); }
   eqChipDown(e,tgt,key,min,max,step){ e.preventDefault(); const el=e.currentTarget; el.setPointerCapture(e.pointerId); const sy=e.clientY; const obj=tgt==='band'?this.eqBands[this.eqSel]:(tgt==='dyn'?(this.eqBands[this.eqSel]||{}).dyn:this.P); if(!obj)return; const sv=obj[key]; { this._eqFlushWheel(); } const before=this.snapshot();
-    const move=ev=>{ let nv=sv+(sy-ev.clientY)/150*(max-min)*(ev.shiftKey?0.15:1); nv=Math.max(min,Math.min(max,nv)); if(step>=1)nv=Math.round(nv/step)*step; obj[key]=nv; this.setState({}); };
+    const move=ev=>{ let nv=sv+(sy-ev.clientY)/150*(max-min)*(ev.shiftKey?0.15:1); nv=Math.max(min,Math.min(max,nv)); obj[key]=nv; this.setState({}); }; // continuous: EQ times/gains keep full precision
     const up=()=>{ this.pushUndoIfChanged(before); el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); };
     el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up); }
   eqCycleType(){ const b=this.eqBands[this.eqSel]; if(!b||b.end)return; { this._eqFlushWheel(); } const before=this.snapshot(); const i=this.EQ_TYPES.indexOf(b.type); b.type=this.EQ_TYPES[(i+1)%this.EQ_TYPES.length]; this.pushUndoIfChanged(before); this.setState({}); }
@@ -1225,7 +1231,7 @@ class Component extends DCLogic {
   eqToggleSolo(){ const b=this.eqBands[this.eqSel]; if(b){ { this._eqFlushWheel(); } const before=this.snapshot(); b.soloed=!b.soloed; this.pushUndoIfChanged(before); this.setState({}); } }
   eqChipWheel(e,tgt,key,min,max,step){ e.preventDefault(); const obj=tgt==='band'?this.eqBands[this.eqSel]:(tgt==='dyn'?(this.eqBands[this.eqSel]||{}).dyn:this.P); if(!obj)return; this._eqGesture();
     const fine=e.shiftKey?0.2:1; let nv=obj[key]+(e.deltaY<0?1:-1)*(step>=1?step:Math.max(step,(max-min)/200))*fine;
-    nv=Math.max(min,Math.min(max,nv)); if(step>=1)nv=Math.round(nv/step)*step; obj[key]=nv; this.setState({}); }
+    nv=Math.max(min,Math.min(max,nv)); obj[key]=nv; this.setState({}); }
   eqMenuOpen(e){
     if(this.state.scopeMode!=='analyzer')return; e.preventDefault();
     const cv=e.currentTarget, rect=cv.getBoundingClientRect();
@@ -1605,8 +1611,9 @@ class Component extends DCLogic {
       texPanelLabel:texBank.label, texParams:texBank.params, texTabLabel:texOtherLabel, texTabToggle:()=>this.setState({texTab:texOther}),
       presetOpen:s.presetOpen, presetToggle:()=>this.setState({presetOpen:!s.presetOpen}), presetClose:()=>this.setState({presetOpen:false}), presetMenu,
       syncBtns:this.SYNC_ORDER.map(sb=>({ label:sb[1], toggle:()=>this.toggleSync(sb[0]), style:Object.assign({},presetBtn,{padding:'4px 8px',background:P[sb[0]]?'linear-gradient(180deg,#cfae7a,#b98f4a)':'linear-gradient(180deg,#efe9d8,#cfc9b6)',color:P[sb[0]]?'#2a2013':'#3b382f',boxShadow:P[sb[0]]?'inset 0 2px 4px rgba(0,0,0,.3),0 0 0 1px rgba(138,90,30,.4)':'0 2px 3px rgba(0,0,0,.3)'}) })),
-      bpmVal:s.bpm, bpmChange:e=>{ const v=parseFloat(e.target.value); if(isFinite(v))this.setState({bpm:Math.max(20,Math.min(300,v))}); },
-      tempoSrcInfo:(this.core.midiEvents&&this.core.midiEvents.length)?('MIDI '+Math.round(this.midiBpm)+' BPM'+(this.core.midiPlaying?' ▸':'')):'MANUAL',
+      // BPM keeps 3 decimals: 0.001 BPM is ~6 degrees of phase drift over a 4-minute track (0.01 would be ~60).
+      bpmVal:s.bpm, bpmChange:e=>{ const v=parseFloat(e.target.value); if(isFinite(v))this.setState({bpm:Math.round(Math.max(20,Math.min(300,v))*1000)/1000}); },
+      tempoSrcInfo:(this.core.midiEvents&&this.core.midiEvents.length)?('MIDI '+(Math.round(this.midiBpm*1000)/1000)+' BPM'+(this.core.midiPlaying?' ▸':'')):'MANUAL',
       genHint:g[2],
       selName:g[1],
       selPtr:ptrStyle(genIdx/(this.GENS.length-1),6,16,25),
