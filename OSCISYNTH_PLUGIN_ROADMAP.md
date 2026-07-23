@@ -66,14 +66,14 @@ figure. That's why decision #3 is a toggle, and why the beam tap point is switch
 ## 2. Phased checklist
 
 ### Phase 0 — Parameter store + undo/redo + presets  *(foundation; everything rides on it)*
-- [ ] Upgrade `this.CTLS` tuples into a **ParameterModel**: `{id, label, section, min, max, step, default, skew, unit, format, toNorm, fromNorm, isDiscrete, choices}`.
+- [x] Upgrade `this.CTLS` tuples into a **ParameterModel** *(done 2026-07-23: `_pdesc(id)` — one descriptor per param with real-unit range, step, skew (`log` / `pow` for zero-inclusive frequency / `lin` / discrete), unit, format, choices)*: `{id, label, section, min, max, step, default, skew, unit, format, toNorm, fromNorm, isDiscrete, choices}`.
 - [ ] Build a **ParamStore** whose live values object *is* `this.P` (so `process()` + `renderVals()` keep reading it unchanged): `setValue(id, real, {gesture, source})`, `getNormalized/setNormalized`, `beginGesture(ids)/endGesture()`, `snapshot()/applySnapshot()`.
 - [ ] Route **every** write through it: `dialDown`, `masterDown`, `mutate()`, generator select, and the future EQ handle drags + wheel-Q. No direct `this.P[id]=` left.
 - [ ] **75-step FIFO undo ring**: one command `{before, after, label}` pushed per gesture on `endGesture`. `mutate()` / preset load / Full Reset each bracket all touched ids as **one** step. Add Undo/Redo buttons (the `↩ ↪` in the mockup).
 - [ ] Model `master` and `gen` (generator, discrete) as first-class params; keep transport/session state (power, playing, octBase, loop, MIDI, hueFollow) **out** of presets.
-- [ ] **Presets**: JSON `{name, version, schemaVersion, params:{id:value}, meta}`. localStorage catalog + `.json` import/export. Versioning + default-fill (missing id → descriptor default) so future params don't break old presets.
-- [ ] **Preset browser** (mockup top bar): dropdown, A/B compare, prev/next arrows, "Full Reset" default, dirty asterisk (`currentSnapshot != loadedSnapshot`).
-- [ ] Real-units canonical values + per-param `toNorm/fromNorm` skew (frequency = log) — this is what host automation consumes later.
+- [x] **Presets**: JSON `{name, v, schemaVersion, params, gen, eq{mix,outDb,tap,bands}}`. localStorage catalog + `.json` import **and export** (EXPORT = current patch, EXPORT BANK = all user presets). Versioning + default-fill. Versioning + default-fill (missing id → descriptor default) so future params don't break old presets.
+- [x] **Preset browser**: dropdown, **A/B compare** (two full snapshot slots, swap = one undo step, COPY A→B), prev/next arrows, "Full Reset" default, dirty asterisk. *(A/B done 2026-07-23)*
+- [x] Real-units canonical values + per-param `toNorm/fromNorm` skew (frequency = log; `pow` where the range includes 0) — knob drags now run THROUGH this mapping, so the browser feel is the automation curve the plugin will register. Verified by `tools/param-model-check.js`.
 
 ### Phase 1 — Retire ScriptProcessorNode → AudioWorklet  *(prereq for dynamic EQ + the C++ port)*
 - [x] Move the engine into an `AudioWorkletProcessor` *(done 2026-07-23: the whole engine is `SynthCore` — one pure, allocation-light class with injected RNG and absolute-counter cadences (2048 detector window / 128 easing, host-block independent); serialized into a blob worklet module at runtime; verified BIT-IDENTICAL to the pre-refactor engine via 4-scenario golden renders and to the SPN path via a headless protocol harness)*.

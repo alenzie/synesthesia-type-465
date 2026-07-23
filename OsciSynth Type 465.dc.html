@@ -68,6 +68,10 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
       <div onClick="{{presetSaveConfirm}}" title="Confirm save" style="{{presetBtnStyle}}">✓</div>
       <div onClick="{{presetSaveCancel}}" title="Cancel" style="{{presetBtnStyle}}">✕</div>
     </sc-if>
+    <div onClick="{{abSwap}}" title="A/B compare: swap between two full states (one undo step)" style="{{abStyle}}">{{abLabel}}</div>
+    <div onClick="{{abCopy}}" title="Copy the current state into the other A/B slot" style="{{presetBtnStyle}}">{{abCopyLabel}}</div>
+    <div onClick="{{exportPreset}}" title="Export the current patch as a .json preset" style="{{presetBtnStyle}}">EXPORT</div>
+    <div onClick="{{exportBank}}" title="Export ALL user presets as a .json bank" style="{{presetBtnStyle}}">EXPORT BANK</div>
     <div onClick="{{presetImportClick}}" title="Import a preset bank .json" style="{{presetBtnStyle}}">IMPORT</div>
     <div onClick="{{presetReset}}" title="Reset all parameters to defaults" style="{{presetBtnStyle}}">RESET</div>
     <input type="file" ref="{{presetFileRef}}" accept="application/json,.json" style="display:none" onChange="{{presetImport}}">
@@ -1004,7 +1008,55 @@ class Component extends DCLogic {
     bctx.fillStyle=g;bctx.beginPath();bctx.arc(hx,hy,7*DPR,0,TAU);bctx.fill();
   }
   // --- Phase 0: parameter model + history ------------------------------------
-  _pmeta(id){ if(id==='master')return {min:0,max:1,step:0.001}; if(id==='eqMix')return {min:0,max:1,step:0.001}; if(id==='eqOut')return {min:-24,max:24,step:0.1}; const c=this.CTLS.find(x=>x[1]===id); return c?{min:c[3],max:c[4],step:c[5]}:null; }
+  /* --- Parameter model (Phase 0 close-out) ------------------------------------------------------
+   * ONE descriptor per param: real-unit range + step + skew + unit/format + discrete choices, and the
+   * normalized <-> real mapping host automation consumes. `skew:'log'` = frequency-style (equal ratio
+   * per unit of travel); `'lin'` = linear; `'int'`/`'bool'` = discrete. This table is the spec the
+   * iPlug2 port registers its IParams from — keep real units canonical, never store normalized. */
+  _pdesc(id){
+    if(this._PDESC&&this._PDESC[id]!==undefined)return this._PDESC[id];
+    if(!this._PDESC){
+      const D={};
+      const put=(id,o)=>{ D[id]=Object.assign({id,section:'global',label:id,skew:'lin',unit:'',format:v=>String(+v.toFixed(3)),isDiscrete:false,choices:null},o); };
+      // knob params come from CTLS: [section,id,label,min,max,step,default,format]
+      // frequency-ish params get a ratio-preserving curve: 'log' when min>0, 'pow' (gamma 3) when the
+      // range includes 0 — log cannot represent zero, and fmRate/FM depth-style knobs must reach exactly 0.
+      const LOGISH={baseFreq:1,fmRate:1,lfoRate:1,cutoff:1};
+      this.CTLS.forEach(c=>put(c[1],{section:c[0],label:c[2],min:c[3],max:c[4],step:c[5],default:c[6],format:c[7],
+        skew:LOGISH[c[1]]?(c[3]>0?'log':'pow'):'lin', gamma:3}));
+      put('master',{label:'MASTER',min:0,max:1,step:0.001,default:0.5,unit:'',format:v=>(v*100).toFixed(0)+'%'});
+      put('eqMix',{section:'eq',label:'EQ MIX',min:0,max:1,step:0.001,default:1,format:v=>(v*100).toFixed(0)+'%'});
+      put('eqOut',{section:'eq',label:'EQ OUT',min:-24,max:24,step:0.1,default:0,unit:'dB',format:v=>v.toFixed(1)+' dB'});
+      ['fm','lfo','morph','rotX','rotY','rotZ'].forEach(k=>{
+        put(k+'Sync',{section:'sync',label:k.toUpperCase()+' SYNC',min:0,max:1,step:1,default:0,skew:'bool',isDiscrete:true,choices:['FREE','SYNC'],format:v=>v?'SYNC':'FREE'});
+        put(k+'Division',{section:'sync',label:k.toUpperCase()+' DIV',min:0,max:this.FM_DIVS.length-1,step:1,default:6,skew:'int',isDiscrete:true,
+          choices:this.FM_DIVS.map(d=>d.l),format:v=>(this.FM_DIVS[v|0]||this.FM_DIVS[6]).l});
+      });
+      this._PDESC=D;
+    }
+    return this._PDESC[id]||null;
+  }
+  _pmeta(id){ const d=this._pdesc(id); return d?{min:d.min,max:d.max,step:d.step}:null; }
+  toNorm(id,real){ // real units -> 0..1 (what host automation reads)
+    const d=this._pdesc(id); if(!d)return 0;
+    const lo=d.min,hi=d.max; if(hi===lo)return 0;
+    const v=Math.max(lo,Math.min(hi,+real||0));
+    if(d.skew==='log'){ const l=Math.max(1e-6,lo); return Math.log(Math.max(l,v)/l)/Math.log(hi/l); }
+    if(d.skew==='pow')return Math.pow((v-lo)/(hi-lo),1/(d.gamma||3));
+    return (v-lo)/(hi-lo);
+  }
+  fromNorm(id,n){ // 0..1 -> real units (what host automation writes)
+    const d=this._pdesc(id); if(!d)return 0;
+    n=Math.max(0,Math.min(1,+n||0));
+    const lo=d.min,hi=d.max;
+    let v;
+    if(d.skew==='log')v=Math.max(1e-6,lo)*Math.pow(hi/Math.max(1e-6,lo),n);
+    else if(d.skew==='pow')v=lo+(hi-lo)*Math.pow(n,d.gamma||3);
+    else v=lo+(hi-lo)*n;
+    if(d.step>=1)v=Math.round(v/d.step)*d.step;
+    return Math.max(lo,Math.min(hi,v));
+  }
+  formatParam(id,v){ const d=this._pdesc(id); if(!d)return String(v); try{ return d.format(v); }catch(e){ return String(v); } }
   _paramIds(){ return this.CTLS.map(c=>c[1]).concat('master','fmSync','fmDivision','eqMix','eqOut','lfoSync','lfoDivision','morphSync','morphDivision','rotXSync','rotXDivision','rotYSync','rotYDivision','rotZSync','rotZDivision'); }
   _eqPersist(bands){ return (bands||[]).map(b=>({id:b.id,type:b.type,freqHz:b.freqHz,gainDb:b.gainDb,q:b.q,on:b.on,slopeDbOct:b.slopeDbOct||12,muted:!!b.muted,soloed:!!b.soloed,end:b.end||undefined,dyn:{on:!!(b.dyn&&b.dyn.on),mode:(b.dyn&&b.dyn.mode)||'down',threshDb:b.dyn?b.dyn.threshDb:-24,ratio:b.dyn?b.dyn.ratio:2,rangeDb:b.dyn?b.dyn.rangeDb:0,attackMs:b.dyn?b.dyn.attackMs:10,releaseMs:b.dyn?b.dyn.releaseMs:120}})); }
   snapshot(){ const p={}; this._paramIds().forEach(id=>{ p[id]=this.P[id]; }); return {params:p, gen:this.state.gen, eqBands:this._eqPersist(this.eqBands), eqSel:this.eqSel, eqTap:this.state.eqTap||'post'}; }
@@ -1058,6 +1110,34 @@ class Component extends DCLogic {
     this._loadedName=p.name||''; this._loadedSnap=after;
   }
   resetToDefault(){ this.presetIdx=-1; this.applyPreset({name:'Init', params:this._defaultParams(), gen:this.GENS[0][0], eq:{bands:[],mix:1,outDb:0}}); }
+  /* --- A/B compare: two full snapshot slots, one gesture to swap, copy A->B / B->A ------------- */
+  abSwap(){
+    const other=this._abSlot==='B'?'A':'B';
+    this['_ab'+(this._abSlot||'A')]=this.snapshot();          // stash the live state into the slot we are leaving
+    const target=this['_ab'+other];
+    this._abSlot=other;
+    if(target){ this.pushUndo(this.snapshot()); this.applySnapshot(target); } // one undo step, like a preset load
+    this.setState({});
+  }
+  abCopy(){ // copy the live state into the OTHER slot (make them match, then tweak)
+    const other=this._abSlot==='B'?'A':'B';
+    this['_ab'+other]=this.snapshot(); this.setState({});
+  }
+  exportUserBank(){
+    const bank={name:'OsciSynth user presets',v:1,schemaVersion:1,exported:new Date().toISOString(),presets:this.banks.user||[]};
+    this._downloadJson(bank,'oscisynth-user-presets.json');
+  }
+  exportCurrentPreset(){
+    const snap=this.snapshot();
+    const preset={name:this._loadedName||'Untitled',v:1,schemaVersion:1,gen:snap.gen,params:snap.params,
+      eq:{mix:this.P.eqMix,outDb:this.P.eqOut,tap:this.state.eqTap||'post',bands:this._eqPersist(this.eqBands)}};
+    this._downloadJson({name:preset.name,v:1,schemaVersion:1,presets:[preset]},(preset.name||'preset').replace(/[^\w.-]+/g,'-').toLowerCase()+'.json');
+  }
+  _downloadJson(obj,filename){
+    const url=URL.createObjectURL(new Blob([JSON.stringify(obj,null,2)],{type:'application/json'}));
+    const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),2000);
+  }
   savePreset(name){ const snap=this.snapshot(); const preset={name:name,v:1,gen:snap.gen,params:snap.params,eq:{mix:this.P.eqMix,outDb:this.P.eqOut,tap:this.state.eqTap||'post',bands:this._eqPersist(this.eqBands)}}; this.banks.user.push(preset); this.curBankKey='user'; this.presetIdx=this.banks.user.length-1; this._loadedName=name; this._loadedSnap=snap; this._persistUser(); this.setState({}); }
   _persistUser(){ try{ localStorage.setItem('synesthesia_presets_v1', JSON.stringify(this.banks.user)); return true; }catch(e){ console.warn('Synesthesia: user presets could not be saved to localStorage (in-memory only this session):', e); return false; } }
   navPreset(dir){ const bank=this._curBank(); if(!bank.length)return; let i=this.presetIdx; i=(i<0?(dir>0?0:bank.length-1):i+dir); i=((i%bank.length)+bank.length)%bank.length; this.presetIdx=i; this.applyPreset(bank[i]); }
@@ -1279,11 +1359,13 @@ class Component extends DCLogic {
     const el=e.currentTarget; el.setPointerCapture(e.pointerId);
     const sy=e.clientY, sv=this.P[id];
     { this._eqFlushWheel(); } const before=this.snapshot();
+    // Drag in NORMALIZED space through the param model, so a skewed knob (frequency) moves by equal
+    // ratio per pixel instead of equal Hz — the same mapping host automation will drive in the plugin.
+    const sn=this.toNorm(id,sv);
     const move=ev=>{
-      let nv=sv+(sy-ev.clientY)/160*(max-min);
-      nv=Math.max(min,Math.min(max,nv));
-      if(step>=1)nv=Math.round(nv/step)*step;
-      this.P[id]=nv; this.setState({});
+      const fine=ev.shiftKey?0.2:1;
+      const nn=Math.max(0,Math.min(1,sn+(sy-ev.clientY)/160*fine));
+      this.P[id]=this.fromNorm(id,nn); this.setState({});
     };
     const up=()=>{this.pushUndoIfChanged(before);el.removeEventListener('pointermove',move);el.removeEventListener('pointerup',up);el.removeEventListener('lostpointercapture',up);};
     el.addEventListener('pointermove',move);el.addEventListener('pointerup',up);el.addEventListener('lostpointercapture',up);
@@ -1474,6 +1556,10 @@ class Component extends DCLogic {
       presetSaveConfirm:()=>{ const el=this._refs.presetNameInputRef; const nm=el&&el.value?el.value.trim():''; if(nm)this.savePreset(nm); this.setState({saving:false}); },
       presetSaveCancel:()=>this.setState({saving:false}),
       presetSaveKey:e=>{ if(e.key==='Enter'){ const el=this._refs.presetNameInputRef; const nm=el&&el.value?el.value.trim():''; if(nm)this.savePreset(nm); this.setState({saving:false}); } else if(e.key==='Escape'){ this.setState({saving:false}); } },
+      abSlot:this._abSlot||'A', abLabel:'A/B · '+(this._abSlot||'A'), abSwap:()=>this.abSwap(), abCopy:()=>this.abCopy(),
+      abStyle:Object.assign({},presetBtn,(this._abSlot==='B')?{background:'linear-gradient(180deg,#9ec8e0,#6a9fc0)',color:'#0a1a24'}:{}),
+      abCopyLabel:'COPY '+(this._abSlot==='B'?'B→A':'A→B'),
+      exportPreset:()=>this.exportCurrentPreset(), exportBank:()=>this.exportUserBank(),
       presetReset:()=>this.resetToDefault(),
       presetImportClick:()=>{ if(this._refs.presetFileRef)this._refs.presetFileRef.click(); },
       presetImport:async e=>{ const f=e.target.files&&e.target.files[0]; if(!f)return; try{ const doc=JSON.parse(await f.text()); if(!this.importBank(doc))alert('Not a preset bank (expected a {"presets":[...]} JSON).'); }catch(err){ alert('Could not read preset file: '+err.message); } e.target.value=''; },
