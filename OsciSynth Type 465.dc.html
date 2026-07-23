@@ -672,7 +672,7 @@ class Component extends DCLogic {
 "    }\n"+
 "    else if(d.t==='note'){ if(d.on)c.noteOn(d.n,d.v); else c.noteOff(d.n); }\n"+
 "    else if(d.t==='panic')c.allNotesOff();\n"+
-"    else if(d.t==='midi'){ c.midiEvents=d.events||[]; c.midiDur=d.dur||0; c.midiPlaying=false; c.seekTo(0); }\n"+
+"    else if(d.t==='midi'){ c.midiEvents=d.events||[]; c.midiDur=d.dur||0; c.midiPlaying=false; c.seekTo(d.pos||0); }\n"+
 "    else if(d.t==='play'){ c.setPlaying(!!d.on); c.notes.playingChanged=false; }\n"+
 "    else if(d.t==='seek')c.seekTo(d.time||0);\n"+
 "    else if(d.t==='pool')this.pool.push({x:d.x,y:d.y});\n"+
@@ -723,7 +723,7 @@ class Component extends DCLogic {
     this._patchSig=sig; p.FM_DIVS=this.FM_DIVS;
     this._postWk({t:'patch',p});
   }
-  _sendMidiToWorklet(){ if(this._wk()&&this.core.midiEvents.length)this._postWk({t:'midi',events:this.core.midiEvents,dur:this.core.midiDur}); }
+  _sendMidiToWorklet(){ if(this._wk()&&this.core.midiEvents.length)this._postWk({t:'midi',events:this.core.midiEvents,dur:this.core.midiDur,pos:this.core.songTime||0}); }
   _onWorkletMsg(d){
     if(d.t!=='beam')return;
     const x=d.x,y=d.y,t=d.tele,c=this.core;
@@ -1070,8 +1070,9 @@ class Component extends DCLogic {
     // bands — they stay ordinary middle bands); append disabled defaults when a side is missing.
     const bands=list.slice(); let lo=-1,hi=-1;
     bands.forEach((b,i)=>{ b.end=undefined; if(b.type==='low-cut'&&(lo<0||b.freqHz<bands[lo].freqHz))lo=i; if(b.type==='high-cut'&&(hi<0||b.freqHz>bands[hi].freqHz))hi=i; });
-    if(lo>=0)bands[lo].end='lo'; else bands.unshift({type:'low-cut',freqHz:20,gainDb:0,q:0.71,on:false,slopeDbOct:12,muted:false,soloed:false,end:'lo',dyn:this._eqDynDefault()});
-    if(hi>=0)bands[hi].end='hi'; else bands.push({type:'high-cut',freqHz:20000,gainDb:0,q:0.71,on:false,slopeDbOct:12,muted:false,soloed:false,end:'hi',dyn:this._eqDynDefault()});
+    const loB=lo>=0?bands[lo]:null, hiB=hi>=0?bands[hi]:null; // bind by reference BEFORE mutating the array (unshift shifts indices)
+    if(loB)loB.end='lo'; else bands.unshift({type:'low-cut',freqHz:20,gainDb:0,q:0.71,on:false,slopeDbOct:12,muted:false,soloed:false,end:'lo',dyn:this._eqDynDefault()});
+    if(hiB)hiB.end='hi'; else bands.push({type:'high-cut',freqHz:20000,gainDb:0,q:0.71,on:false,slopeDbOct:12,muted:false,soloed:false,end:'hi',dyn:this._eqDynDefault()});
     let mid=0; const out=bands.filter(b=>b.end?true:(++mid<=this.EQ_MAX_MID));
     for(const b of out){ if(b.id===undefined)b.id=++this._eqIdSeq; else if(b.id>this._eqIdSeq)this._eqIdSeq=b.id; }
     return out;

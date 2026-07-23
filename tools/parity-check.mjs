@@ -1,7 +1,11 @@
-import { instantiateFaustModuleFromFile, LibFaust, FaustCompiler, FaustMonoDspGenerator } from './node_modules/@grame/faustwasm/dist/esm/index.js';
 import fs from 'fs';
 import { createRequire } from 'module';
+import { pathToFileURL } from 'url';
 const require = createRequire(import.meta.url);
+// The package's CJS entry exports nothing usable — import its ESM dist, resolved through normal
+// node_modules lookup from this script's location upward (tools/ or repo-root installs both work).
+const { instantiateFaustModuleFromFile, LibFaust, FaustCompiler, FaustMonoDspGenerator } =
+  await import(pathToFileURL(require.resolve('@grame/faustwasm/dist/esm/index.js')).href);
 
 const html = fs.readFileSync(process.argv[2], 'utf8');
 function method(name, sig) {

@@ -1,0 +1,11 @@
+{
+  "name": "oscisynth-verify",
+  "version": "1.0.0",
+  "description": "Headless verification harnesses (see README.md)",
+  "type": "commonjs",
+  "dependencies": {
+    "@grame/faustwasm": "^0.16.6",
+    "playwright-core": "^1.61.1"
+  },
+  "private": true
+}
