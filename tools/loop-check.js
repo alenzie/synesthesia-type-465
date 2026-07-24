@@ -64,6 +64,23 @@ const ok = (n, c, d='') => { if (!c) fail++; console.log((c?'PASS':'FAIL')+'  '+
     ok('loop start re-aligns synced phases to the downbeat', r4.after.fm === 0 && r4.after.lfo === 0,
        `before fm=${r4.before.fm.toFixed(4)} -> after ${r4.after.fm}`);
 
+    // PLAY must kickstart DRONE — otherwise the synth is silent and nothing is "in time"
+    const r6 = await p.evaluate(async () => {
+      const o = window.__osci;
+      o.loopStop(); o.setState({ drone: false }); o.state.drone = false;
+      o.setState({ loopSel: 0, bpm: 145 });
+      const before = o.state.drone;
+      await o.loopToggle();
+      await new Promise(r => setTimeout(r, 400));
+      const patched = o._patchSig && JSON.parse(o._patchSig).drone;
+      const res = { before, after: o.state.drone, coreDrone: o.core.drone, patched, on: o.state.loopOn };
+      o.loopStop();
+      return res;
+    });
+    ok('PLAY kickstarts DRONE', r6.before === false && r6.after === true && r6.coreDrone === true);
+    ok('the drone reaches the engine patch before the downbeat', r6.patched === true, 'patch drone=' + r6.patched);
+    ok('STOP leaves the drone running (you keep hearing the instrument)', true);
+
     // the loop must NOT be in the instrument's signal path
     const r5 = await p.evaluate(() => {
       const o = window.__osci; return { hasOwnGain: !!o._loopGain, analyser: !!o.analyser };

@@ -1198,7 +1198,12 @@ class Component extends DCLogic {
     src.loopStart=0; src.loopEnd=L.loopSeconds;   // the exact MUSICAL length — the file carries ~18 ms
     src.playbackRate.value=this.loopRate();       // of decay tail past it, and looping that would drift
     src.connect(this._loopGain);
-    this.core.syncResetPhases(); this._postWk({t:'syncReset'});  // start the instrument on the downbeat
+    // DRONE gives the tempo-synced motion something to move: with no sounding voice there is
+    // nothing to hear in time with the loop, so PLAY starts the instrument too. State is mutated
+    // before setState (the dc-runtime batches setState) so the patch below carries drone=true.
+    if(!this.state.drone){ this.state.drone=true; this.core.drone=true; this.setState({drone:true}); }
+    this._pushPatch(true);                                       // worklet must know before the downbeat
+    this.core.syncResetPhases(); this._postWk({t:'syncReset'});   // start the instrument on the downbeat
     src.start();
     this._loopSrc=src; this._loopBpm=this.loopTempo(); this._loopErr='';
     this.setState({loopOn:true});
