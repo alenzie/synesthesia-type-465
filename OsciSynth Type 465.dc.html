@@ -160,6 +160,16 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
       </div>
       <div onClick="{{selNext}}" style="background:#17160f;color:#ffb454;font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.12em;padding:8px 14px;border-radius:4px;box-shadow:inset 0 1px 4px #000;cursor:pointer;min-width:130px;text-align:center" title="Click to cycle">{{selName}}</div>
       <div style="flex:1;min-width:220px;font:400 8.5px 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#6d6858">{{genHint}}</div>
+      <sc-if value="{{wtOn}}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;flex:0 0 auto">
+          <canvas ref="{{wtStripRef}}" title="Current frame · MORPH playhead" style="width:210px;height:46px;border:1px solid #8f8a77;border-radius:5px;background:#0d1410"></canvas>
+          <div style="display:flex;flex-direction:column;gap:5px">
+            <div onClick="{{wtImportClick}}" title="Load a Serum/Vital .wav or Surge .wt wavetable" style="{{wtBtnStyle}}">{{wtBtnLabel}}</div>
+            <div onPointerDown="{{wtTrimDown}}" title="Table trim (drag)" style="{{wtTrimStyle}}">TRIM {{wtTrimText}}</div>
+          </div>
+          <input type="file" ref="{{wtFileRef}}" accept=".wav,.wt,audio/wav,audio/x-wav" style="display:none" onChange="{{wtFileChange}}">
+        </div>
+      </sc-if>
       <div style="flex:0 0 118px;background:linear-gradient(180deg,#f6f1e0,#e9e3cf);border:1px solid #8f8a77;border-radius:6px;position:relative;height:62px;overflow:hidden;box-shadow:inset 0 1px 3px rgba(0,0,0,.25)" title="Output VU (relocated)">
         <svg viewBox="0 0 170 92" style="position:absolute;inset:0;width:100%;height:100%">
           <path d="M45.2 46.6 L37.5 40.1 M63 32.9 L58.8 23.8 M85 28 L85 18 M107 32.9 L111.2 23.8 M124.8 46.6 L132.5 40.1" stroke="#6b6656" stroke-width="1.6"></path>
@@ -170,6 +180,13 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
         <div style="position:absolute;bottom:3px;right:6px;font:600 6px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#6b6656">VU · OUT</div>
       </div>
     </div>
+
+    <sc-if value="{{wtOn}}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.06em;color:{{wtStatusColor}}">
+        <span>{{wtStatus}}</span>
+        <sc-for list="{{wtCandidates}}" as="c" hint-placeholder-count="0"><div onClick="{{c.pick}}" style="{{c.style}}">{{c.label}}</div></sc-for>
+      </div>
+    </sc-if>
 
     <sc-if value="{{eqAnalyzerOn}}" hint-placeholder-val="{{ true }}">
     <div style="border:1px solid #a49e8c;border-radius:8px;background:rgba(255,255,255,.14);padding:10px 12px;display:flex;flex-direction:column;gap:8px">
@@ -303,7 +320,7 @@ function wtHashTable(t){
   dvv.setUint32(o,t.frameSize,true); dvv.setUint32(o+4,t.frames,true); dvv.setUint32(o+8,t.channels,true); dvv.setUint32(o+12,t.meta.interp.raw,true);
   return wtSha256(new Uint8Array(buf));
 }
-function parseWavetable(buf){
+function parseWavetable(buf,forceFrameSize){
   const dvv=new DataView(buf), U8=new Uint8Array(buf);
   const tag=(o)=>String.fromCharCode(U8[o],U8[o+1],U8[o+2],U8[o+3]);
   if(buf.byteLength<12)throw new Error('File too short to be a wavetable.');
@@ -380,8 +397,9 @@ function parseWavetable(buf){
       if(fs>=64&&fs<=8192&&!(fs&(fs-1))&&ip>=0&&ip<=4){ frameSize=fs; rawInterp=ip; source='clm'; comment=clm.slice(mm[0].length).replace(/[^\x20-\x7e]/g,'').trim(); }
       else truncated.push('ignored malformed clm chunk (size '+fs+', interp '+ip+')');
     } } // payload is "<!>AAAA BC000000 D" — consume the whole flags block before the comment
-  if(!frameSize){
-    const cands=[2048,1024,512,256,4096,8192].filter(fs=>nTotal>=fs&&nTotal%fs===0&&Math.floor(nTotal/fs)<=256);
+  const cands=[2048,1024,512,256,4096,8192].filter(fs=>nTotal>=fs&&nTotal%fs===0&&Math.floor(nTotal/fs)<=256);
+  if(forceFrameSize){ frameSize=forceFrameSize; source='user'; }
+  else if(!frameSize){
     if(!cands.length){ frameSize=2048; if(nTotal<2048)throw new Error('No usable frame size for '+nTotal+' samples.'); }
     else { frameSize=cands[0]; ambiguous=cands.length>1; }
   }
@@ -393,7 +411,7 @@ function parseWavetable(buf){
   for(let i=0;i<frameSize*frames;i++){
     if(channels===2){ dataL[i]=read(i*2); dataR[i]=read(i*2+1); } else dataL[i]=read(i);
   }
-  const meta={source,interp:{raw:rawInterp,play:rawInterp===0?0:1},comment,truncated,sampleRate};
+  const meta={source,interp:{raw:rawInterp,play:rawInterp===0?0:1},comment,truncated,sampleRate,candidates:cands};
   if(ambiguous)meta.ambiguous=true;
   return finish(frameSize,frames,channels,dataL,dataR,meta);
 }
@@ -933,7 +951,7 @@ class Component extends DCLogic {
       ['radial-gradient(circle at 40% 35%,#ffc4b2,#e03a20)','0 0 6px rgba(235,85,55,.8)'],
     ];
     this._refs={};
-    ['beamRef','fpsRef','needleRef','fileRef','seekThumbRef','timeRef','dotsRef','presetFileRef','presetNameInputRef','presetNameRef','outPeakBarRef','outRmsBarRef','grSelRef'].forEach(n=>{ this[n]=el=>{this._refs[n]=el; if(n==='beamRef'&&el)this.sizeBeam();}; });
+    ['beamRef','fpsRef','needleRef','fileRef','seekThumbRef','timeRef','dotsRef','presetFileRef','presetNameInputRef','presetNameRef','outPeakBarRef','outRmsBarRef','grSelRef','wtFileRef','wtStripRef'].forEach(n=>{ this[n]=el=>{this._refs[n]=el; if(n==='beamRef'&&el)this.sizeBeam();}; });
     if(typeof window!=='undefined')window.__osci=this; // debug/automation handle (Playwright browser pass)
   }
   mtof(n){return 440*Math.pow(2,(n-69)/12);}
@@ -1179,6 +1197,69 @@ class Component extends DCLogic {
    * modest moves a drum loop usually needs, obvious past ~15%. The UI shows the percentage.
    * Per the owner's design call, changing tempo STOPS playback rather than restretching underneath
    * a playing loop. Starting a loop re-aligns the synth's tempo-synced motions to its downbeat. */
+  /* --- C5: wavetable import UI ---------------------------------------------------------------
+   * Its OWN hidden file input (never the preset one). Flow: read -> parse -> optional frame-size
+   * chooser when the file has no clm chunk and several sizes fit -> mips (worker, with fallbacks)
+   * -> hash -> cache -> select+send. Every failure is readable text in the panel, not an alert().
+   * Persistence and preset recall are C4; a table loaded here lives for the session. */
+  wtImportClick(){ if(this._refs.wtFileRef)this._refs.wtFileRef.click(); }
+  async wtImportFile(file,forceFrameSize){
+    if(!file)return;
+    this._wtBusy=true; this._wtErr=''; this._wtNote='reading '+file.name+'\u2026'; this.setState({});
+    try{
+      const buf=this._wtLastBuf&&this._wtLastName===file.name?this._wtLastBuf:await file.arrayBuffer();
+      this._wtLastBuf=buf; this._wtLastName=file.name;
+      const t=parseWavetable(buf,forceFrameSize);
+      this._wtPending=(t.meta.ambiguous&&!forceFrameSize)?{name:file.name,cands:t.meta.candidates}:null;
+      this._wtNote='building mip levels\u2026'; this.setState({});
+      if(!this.ctx)this.ctx=new (window.AudioContext||window.webkitAudioContext)();
+      const epoch=this.wtBeginEpoch();
+      const mips=await buildWavetableMipsAsync(t);
+      if(!mips)throw new Error('mip build failed');
+      mips.interp=t.meta.interp;
+      const hash=wtHashTable(t);
+      this.core.wtPut(hash,mips);
+      this._wtInfo={name:file.name.replace(/\.[^.]+$/,''),frames:t.frames,frameSize:t.frameSize,
+        channels:t.channels,source:t.meta.source,truncated:t.meta.truncated.slice(),hash};
+      this._wtNote=''; this._wtBusy=false;
+      if(!this.wtSelect(hash,epoch)){ this.setState({}); return; }   // a newer import won — drop this one
+      if(this.state.gen!=='wavetable')this.setState({gen:'wavetable'});
+    }catch(err){
+      this._wtBusy=false; this._wtNote=''; this._wtErr=String(err&&err.message||err);
+      this.setState({});
+    }
+  }
+  wtPickFrameSize(fs){ const p=this._wtPending; if(!p)return; this._wtPending=null; this.wtImportFile({name:p.name,arrayBuffer:()=>Promise.resolve(this._wtLastBuf)},fs); }
+  _drawWtStrip(){
+    const cv=this._refs.wtStripRef; if(!cv||this.state.gen!=='wavetable')return;
+    const DPR=Math.min(2,window.devicePixelRatio||1);
+    const w=cv.clientWidth||220, h=cv.clientHeight||44;
+    if(cv.width!==(w*DPR|0)||cv.height!==(h*DPR|0)){ cv.width=w*DPR|0; cv.height=h*DPR|0; }
+    const g=cv.getContext('2d'); const W=cv.width,H=cv.height;
+    g.clearRect(0,0,W,H); g.fillStyle='#0d1410'; g.fillRect(0,0,W,H);
+    const wt=this.core.wtActive(); if(!wt)return;
+    const lv=wt.levels[0], nk=lv.frameSize, frames=wt.frames;
+    const m=(this.core._mEff!==undefined&&this.core._mEff>=0)?this.core._mEff:(this.P.morph||0);
+    const stepped=wt.interp&&wt.interp.play===0;
+    const fi=stepped?Math.min(frames-1,Math.floor(m*frames)):Math.round(m*(frames-1));
+    const off=fi*nk;
+    g.strokeStyle='rgba(255,206,122,0.9)'; g.lineWidth=1.2*DPR; g.beginPath();
+    if(wt.channels===2&&lv.R){                                  // stereo -> draw the X/Y figure
+      const r=Math.min(W,H)*0.42, cx=W/2, cy=H/2;
+      for(let i=0;i<=nk;i+=2){ const j=i%nk; const x=cx+lv.L[off+j]*r, y=cy-lv.R[off+j]*r;
+        if(i===0)g.moveTo(x,y); else g.lineTo(x,y); }
+    } else {                                                    // mono -> draw the waveform
+      for(let px=0;px<=W;px++){ const j=(px/W*nk)|0; const v=lv.L[off+Math.min(nk-1,j)];
+        const y=H/2-v*(H*0.42); if(px===0)g.moveTo(px,y); else g.lineTo(px,y); }
+    }
+    g.stroke();
+    // MORPH playhead across the frame span
+    const px=Math.round((frames>1?fi/(frames-1):0)*(W-2))+1;
+    g.strokeStyle='rgba(150,255,190,0.55)'; g.lineWidth=1*DPR;
+    g.beginPath(); g.moveTo(px,0); g.lineTo(px,H); g.stroke();
+    g.fillStyle='rgba(150,255,190,0.6)'; g.font=(7*DPR)+"px 'IBM Plex Mono',monospace"; g.textAlign='left';
+    g.fillText('FRAME '+(fi+1)+'/'+frames,4*DPR,10*DPR);
+  }
   loopList(){ return (typeof window!=='undefined'&&window.OSCI_LOOPS)||[]; }
   loopCur(){ return this.loopList()[this.state.loopSel]||null; }
   loopTempo(){ return (this.core.midiPlaying?this.midiBpm:(this.state.bpm||120))||120; }
@@ -1405,6 +1486,7 @@ class Component extends DCLogic {
     if(this._fCnt>=30){ if(this._refs.fpsRef)this._refs.fpsRef.textContent=(1000/(this._fAcc/this._fCnt)).toFixed(0)+' FPS'; this._fAcc=0;this._fCnt=0; }
     if(this._usingWorklet&&this.running)this._pushPatch(false); // latest-wins patch sync, once per RAF
     if(this.state.loopOn&&this._loopBpm!=null&&Math.abs(this.loopTempo()-this._loopBpm)>1e-9)this.loopStop(); // tempo moved -> stop, never restretch underneath
+    this._drawWtStrip();
     this.meterVal=Math.max(this.core.outPeak,this.meterVal*0.88); this.core.outPeak=0;
     { const rmsNow=this.core.outSqN?Math.sqrt(this.core.outSq/this.core.outSqN):0; this.meterRms=Math.max(rmsNow,(this.meterRms||0)*0.92); this.core.outSq=0; this.core.outSqN=0;
       const pct=v=>{ const db=20*Math.log10(Math.max(1e-4,v)); return Math.max(0,Math.min(100,(db+60)/60*100)).toFixed(1)+'%'; };
@@ -2106,6 +2188,31 @@ class Component extends DCLogic {
       })(),
       bpmVal:s.bpm, bpmChange:e=>{ const v=Number(e.target.value); if(Number.isFinite(v))this.setState({bpm:Math.max(20,Math.min(300,v))}); },
       tempoSrcInfo:(this.core.midiEvents&&this.core.midiEvents.length)?('MIDI '+(Math.round(this.midiBpm*1000)/1000)+' BPM'+(this.core.midiPlaying?' ▸':'')):'MANUAL',
+      wtOn:s.gen==='wavetable',
+      wtImportClick:()=>this.wtImportClick(),
+      wtFileChange:e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=''; this._wtLastBuf=null; this._wtLastName=''; this.wtImportFile(f); },
+      wtBtnLabel:this._wtBusy?'\u2026 LOADING':'LOAD TABLE',
+      wtBtnStyle:Object.assign({},presetBtn,{padding:'5px 9px'},this._wtBusy?{opacity:0.6}:{}),
+      wtTrimText:(this.core.wtTrimDb>0?'+':'')+this.core.wtTrimDb.toFixed(1),
+      wtTrimStyle:Object.assign({},presetBtn,{padding:'5px 9px',cursor:'ns-resize'}),
+      wtTrimDown:e=>{
+        e.preventDefault(); const el=e.currentTarget; el.setPointerCapture(e.pointerId);
+        const sy=e.clientY, sv=this.core.wtTrimDb;
+        const move=ev=>{ const v=Math.max(-24,Math.min(24,sv+(sy-ev.clientY)/8*(ev.shiftKey?0.2:1))); this.core.wtTrimDb=v; this.setState({}); };
+        const up=()=>{ el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); };
+        el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up);
+      },
+      wtStatusColor:this._wtErr?'#c8452e':(this._wtPending?'#8a5a1e':'#6d6858'),
+      wtStatus:(()=>{
+        if(this._wtErr)return '\u26a0 '+this._wtErr;
+        if(this._wtNote)return this._wtNote;
+        if(this._wtPending)return 'no frame size in the file \u2014 pick one:';
+        const i=this._wtInfo;
+        if(!i)return 'built-in basic shapes \u00b7 16 frames \u00d7 2048 \u00b7 LOAD TABLE for a Serum/Vital .wav or Surge .wt';
+        const t=i.truncated&&i.truncated.length?' \u00b7 \u26a0 '+i.truncated.join('; '):'';
+        return i.name+' \u00b7 '+i.frames+' frames \u00d7 '+i.frameSize+' \u00b7 '+(i.channels===2?'stereo X/Y':'mono')+' \u00b7 '+i.source+t;
+      })(),
+      wtCandidates:(this._wtPending?this._wtPending.cands:[]).map(fs=>({label:String(fs),style:Object.assign({},presetBtn,{padding:'3px 8px'}),pick:()=>this.wtPickFrameSize(fs)})),
       genHint:g[2],
       selName:g[1],
       selPtr:ptrStyle(genIdx/(this.GENS.length-1),6,16,25),
@@ -2137,7 +2244,7 @@ class Component extends DCLogic {
       octLabel:'C'+(s.octBase/12-1)+' – C'+(s.octBase/12+1),
       btnOct:hwBtn(false),
       fileRef:this.fileRef, seekThumbRef:this.seekThumbRef, timeRef:this.timeRef,
-      beamRef:this.beamRef, fpsRef:this.fpsRef, needleRef:this.needleRef, dotsRef:this.dotsRef, outPeakBarRef:this.outPeakBarRef, outRmsBarRef:this.outRmsBarRef, grSelRef:this.grSelRef,
+      beamRef:this.beamRef, fpsRef:this.fpsRef, needleRef:this.needleRef, dotsRef:this.dotsRef, outPeakBarRef:this.outPeakBarRef, outRmsBarRef:this.outRmsBarRef, grSelRef:this.grSelRef, wtFileRef:this.wtFileRef, wtStripRef:this.wtStripRef,
       loadClick:()=>{ if(this._refs.fileRef)this._refs.fileRef.click(); },
       fileChange:async e=>{
         const file=e.target.files[0]; if(!file)return;
