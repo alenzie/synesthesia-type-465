@@ -753,7 +753,16 @@ class SynthCore {
     const cut=Math.exp(-TAU*(400+(1-P.smooth)*11000)/sr);
     const dk=1+P.drive*5,dnorm=Math.tanh(dk);
     const aC=1-Math.exp(-1/(P.attack*sr)),dC=1-Math.exp(-1/(P.decay*sr)),rC=Math.exp(-1/(P.release*sr));
-    const fc=Math.min(sr*0.24,P.cutoff), fco=2*Math.sin(Math.PI*fc/sr), qd=1-Math.min(0.96,P.reso), fltOn=(P.cutoff<17900||P.reso>0.001||((P.lfoTarget|0)===2&&P.lfoDepth>0));
+    const fc=Math.min(sr*0.24,P.cutoff), qd=1-Math.min(0.96,P.reso);
+    // Chamberlin SVF STABILITY BOUND. State matrix trace T = 2 - f^2 - f*q, determinant D = 1 - f*q;
+    // both poles stay inside the unit circle only while f < sqrt(q^2 + 4) - q. The old sr*0.24 ceiling
+    // ignored this: at LOW resonance (q=1) it allowed f=1.369 against a limit of 1.236, so any high
+    // cutoff — static, or an LFO sweeping into one — made the filter DIVERGE, and the |svL|>8 guard
+    // below slammed it to zero every few samples. That reset storm was the screech. The limit rises
+    // with resonance, so resonant patches keep their full range.
+    const fMax=0.95*(Math.sqrt(qd*qd+4)-qd);
+    let fco=2*Math.sin(Math.PI*fc/sr); if(fco>fMax)fco=fMax;
+    const fltOn=(P.cutoff<17900||P.reso>0.001||((P.lfoTarget|0)===2&&P.lfoDepth>0));
     const bpm=(this.midiPlaying?this.midiBpm:(this.bpm||120)), divHz=(d)=>(bpm/60)/((this.FM_DIVS[(d|0)]||this.FM_DIVS[6]).b);
     const dv=this.voices[0];
     dv.gate=this.drone; dv.freq=P.baseFreq; dv.vel=1; if(dv.note<0)dv.note=0;
@@ -809,7 +818,8 @@ class SynthCore {
       let x=sumX*norm,y=sumY*norm;
       if(P.drive>0){x=Math.tanh(x*dk)/dnorm;y=Math.tanh(y*dk)/dnorm;}
       this.lpX+=(x-this.lpX)*(1-cut); this.lpY+=(y-this.lpY)*(1-cut); x=this.lpX;y=this.lpY;
-      if(fltOn){ const fcoS=(lt===2)?2*Math.sin(Math.PI*Math.min(sr*0.24,Math.max(40,P.cutoff*Math.pow(2,lfo*2.5)))/sr):fco;
+      if(fltOn){ let fcoS=(lt===2)?2*Math.sin(Math.PI*Math.min(sr*0.24,Math.max(40,P.cutoff*Math.pow(2,lfo*2.5)))/sr):fco;
+        if(fcoS>fMax)fcoS=fMax;   // the modulated cutoff obeys the same stability bound
         this.svLX+=fcoS*this.svBX; const hX=x-this.svLX-qd*this.svBX; this.svBX+=fcoS*hX; x=this.svLX;
         this.svLY+=fcoS*this.svBY; const hY=y-this.svLY-qd*this.svBY; this.svBY+=fcoS*hY; y=this.svLY;
         if(!isFinite(this.svLX)||Math.abs(this.svLX)>8){this.svLX=0;this.svBX=0;} if(!isFinite(this.svLY)||Math.abs(this.svLY)>8){this.svLY=0;this.svBY=0;} }
