@@ -1,6 +1,7 @@
 # Unit: Wavetable import + oscillator (Serum-compatible)
 
-*(Drafted 2026-07-23. Not yet scheduled — sequencing is an owner call, see § SEQUENCING. Format specs below
+*(BUILT 2026-07-24 — see `WAVETABLE_BUILD_PLAN.md` for the commit-by-commit record and what was
+deliberately deferred. Drafted 2026-07-23. Not yet scheduled — sequencing is an owner call, see § SEQUENCING. Format specs below
 are WEB-VERIFIED, not assumed; sources at the end.)*
 
 ## Context / why

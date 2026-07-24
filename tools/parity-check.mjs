@@ -7,7 +7,12 @@ const require = createRequire(import.meta.url);
 const { instantiateFaustModuleFromFile, LibFaust, FaustCompiler, FaustMonoDspGenerator } =
   await import(pathToFileURL(require.resolve('@grame/faustwasm/dist/esm/index.js')).href);
 
-const html = fs.readFileSync(process.argv[2], 'utf8');
+import path from 'path';
+import { fileURLToPath } from 'url';
+// fileURLToPath, not URL.pathname — the latter stays percent-encoded and this repo path has spaces.
+const __dir = path.dirname(fileURLToPath(import.meta.url));
+const htmlPath = process.argv[2] || path.resolve(__dir, '..', 'OsciSynth Type 465.dc.html');
+const html = fs.readFileSync(htmlPath, 'utf8');
 function method(name, sig) {
   const start = html.indexOf(name + sig);
   if (start < 0) throw new Error(name + ' not found');

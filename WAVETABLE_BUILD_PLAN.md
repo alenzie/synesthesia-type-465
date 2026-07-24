@@ -26,6 +26,12 @@ anchors. Owner decision: build BEFORE the iPlug2 port, in the browser, as a `Syn
 - Single-file app: all code lives in `OsciSynth Type 465.dc.html`; pure logic goes on `SynthCore` (it must
   serialize into the worklet module) or as top-level functions beside it; UI logic on `Component`.
 
+## STATUS — unit complete (2026-07-24)
+C1 parser + fixtures · C2 mip pyramid · C3 oscillator + transport · C4 storage + preset refs ·
+C5 import UI · C6 docs/close-out — **all landed**, each followed by a live-surface codex review whose
+findings were verified and applied. Deferred deliberately: spectral-morph frame interpolation (falls back
+to linear), Serum-style arbitrary-audio slicing, wavetable export, and >2 concurrently loaded tables.
+
 ## Commit sequence
 
 ### C1 — `parseWavetable` + fixtures + `tools/wavetable-check.js`  *(pure code, zero UI/engine impact)*

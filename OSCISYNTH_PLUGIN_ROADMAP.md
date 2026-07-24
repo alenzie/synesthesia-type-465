@@ -121,12 +121,25 @@ figure. That's why decision #3 is a toggle, and why the beam tap point is switch
 
 ---
 
+### Wavetable unit — imported wavetables as an 11th generator  *(built 2026-07-24; not part of the original phase plan)*
+- [x] **Serum/Vital `.wav` + Surge `.wt` import** — RIFF walker (PCM 16/24/32, float32, `WAVE_FORMAT_EXTENSIBLE`), the Xfer `clm ` chunk (`<!>AAAA BC000000 D`), frame-size inference with a user chooser when ambiguous, loud structural repairs, hostile-input hardening.
+- [x] **FFT mip pyramid** built at import in a worker (data:/blob/main-thread fallback chain): level *k* = `N>>k` down to 8, harmonics `1..Nk/2-1`, DC and Nyquist zeroed at every level, inverse scaled by `1/N` so a retained harmonic keeps its amplitude across levels. **This is a port spec** — the C++ side must match it within tolerance.
+- [x] **The oscillator**: dedicated per-voice phase (X/Y HARM inert), MORPH as the frame position (stepped tables use `floor(m*frames)` so the last frame is reachable), fractional LOD from the true sampler increment with adjacent-level blending, mono tables drawn through ST PHASE and **stereo tables mapping L→X and R→Y — a scope-figure wavetable no Serum-class synth can do**.
+- [x] **Storage + presets**: IndexedDB keyed by content hash (probed with a real round-trip because this app runs from `file://`, with a genuine in-memory fallback); presets carry a *reference*, never samples; a missing table warns by name and keeps playing the built-in.
+- [x] **UI**: LOAD TABLE, live frame strip with the MORPH playhead, per-table TRIM, readable in-panel errors.
+- Detail: `WAVETABLE_UNIT_PLAN.md` (design + verified format specs) and `WAVETABLE_BUILD_PLAN.md` (commit-by-commit). Harnesses: `tools/wavetable-check.js`, `tools/wt-ui-check.js`.
+
+### Reference drum loops — tempo-matched accompaniment  *(built 2026-07-24; evaluation aid, not instrument surface)*
+- [x] Tempo-labelled loops embedded as a gitignored base64 bundle so they work from `file://`; loop length derived from tempo × beats (the files carry ~18 ms of tail that would otherwise drift); `playbackRate` matching with the pitch trade-off surfaced in the UI; changing tempo stops playback; PLAY kickstarts DRONE and re-aligns the tempo-synced motions to the loop downbeat; switching loops parks the instrument and adopts the loop's native tempo. Detail: `tools/make-loops.js`, `tools/loop-check.js`.
+
 ## 3. Open items / risks
 - **COOP/COEP headers** for SharedArrayBuffer in the browser build (Phase 1). Moot in the plugin.
 - **iPlug2 = more hand-built plumbing** than JUCE (no `APVTS`/`UndoManager`/`juce::dsp`). Accepted for the MIT license; the JS param/undo/preset/EQ designs above are written to be the C++ spec so it's a port, not a redesign.
 - **Dynamics direction** (downward vs bidirectional) + **Range sign** semantics — confirm during Phase 2.
 - **Add/remove-bands** UI + variable band count adds state/layout complexity vs a fixed 6+2.
 - **EQ-on-the-beam** (visuals toggle on) can turn a clean figure to mush under heavy filtering — a feature, but document it.
+- **Wavetable stretch/pitch**: the reference-loop player matches tempo by resampling, so a stretch shifts pitch (flagged past 15% in the UI). A pitch-preserving stretch is deferred.
+- **Filter stability** (fixed 2026-07-24): the Chamberlin SVF diverges past `f = sqrt(q²+4) - q`; the coefficient is now clamped to 0.95 of that bound. Any future filter work must preserve this — `tools/engine-stability-check.js` sweeps 420 combinations to enforce it.
 
 ## 4. Key references
 - RBJ Audio-EQ-Cookbook (biquad coeffs): https://webaudio.github.io/Audio-EQ-Cookbook/audio-eq-cookbook.html
