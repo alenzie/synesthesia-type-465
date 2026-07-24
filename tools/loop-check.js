@@ -21,22 +21,40 @@ const ok = (n, c, d='') => { if (!c) fail++; console.log((c?'PASS':'FAIL')+'  '+
 
     // A decimal tempo must be TYPEABLE, not merely storable. The earlier precision harness called the
     // handler with a complete value and so missed that clamping every keystroke on a controlled input
-    // turned "134.685" into 300 ("1"->20, "3" appended -> 203, -> 300).
+    // turned "134.685" into 300 ("1"->20, "3" appended -> 203, -> 300). The field is type="text" now
+    // (not type="number") — the native number widget itself was found to fight select-all-and-retype
+    // editing independent of the app's own clamp logic, so BPM_SEL below matches on title, not type.
+    const BPM_SEL = 'input[title*="Manual BPM"]';
     {
-      const input = p.locator('input[type=number]').first();
+      const input = p.locator(BPM_SEL).first();
       await input.click({ clickCount: 3 });
       await input.type('134.685', { delay: 40 });
       await p.waitForTimeout(200);
-      const typed = await p.evaluate(() => ({ st: window.__osci.state.bpm, f: document.querySelector('input[type=number]').value }));
+      const typed = await p.evaluate((sel) => ({ st: window.__osci.state.bpm, f: document.querySelector(sel).value }), BPM_SEL);
       ok('a decimal BPM can be TYPED character by character', typed.st === 134.685, `field "${typed.f}" state ${typed.st}`);
       await input.evaluate(el => el.blur());
       await p.waitForTimeout(150);
-      const blurred = await p.evaluate(() => ({ st: window.__osci.state.bpm, f: document.querySelector('input[type=number]').value }));
+      const blurred = await p.evaluate((sel) => ({ st: window.__osci.state.bpm, f: document.querySelector(sel).value }), BPM_SEL);
       ok('blur normalizes the field without losing the value', blurred.st === 134.685, `field "${blurred.f}"`);
-      // out-of-range text still clamps on commit
+      // out-of-range text still clamps on commit — range is 1..999, not the old 20..300
       await input.click({ clickCount: 3 }); await input.type('9999', { delay: 30 });
       await input.evaluate(el => el.blur()); await p.waitForTimeout(150);
-      ok('out-of-range entry clamps on commit', await p.evaluate(() => window.__osci.state.bpm) === 300);
+      ok('out-of-range entry clamps on commit', await p.evaluate(() => window.__osci.state.bpm) === 999);
+      await input.click({ clickCount: 3 }); await input.type('0', { delay: 30 });
+      await input.evaluate(el => el.blur()); await p.waitForTimeout(150);
+      ok('0 BPM clamps up to the new floor of 1', await p.evaluate(() => window.__osci.state.bpm) === 1);
+      await p.evaluate(() => window.__osci.setState({ bpm: 138, bpmText: undefined }));
+      // Enter commits immediately, without needing a separate blur/click-away
+      await input.click({ clickCount: 3 }); await input.type('154', { delay: 30 });
+      await input.press('Enter');
+      await p.waitForTimeout(150);
+      ok('Enter commits the typed tempo', await p.evaluate(() => window.__osci.state.bpm) === 154, String(await p.evaluate(() => window.__osci.state.bpm)));
+      // Escape discards the in-progress edit and reverts to the last committed value
+      await input.click({ clickCount: 3 }); await input.type('42', { delay: 30 });
+      await input.press('Escape');
+      await p.waitForTimeout(150);
+      const esc = await p.evaluate((sel) => ({ st: window.__osci.state.bpm, f: document.querySelector(sel).value }), BPM_SEL);
+      ok('Escape reverts without committing', esc.st === 154 && esc.f === '154', `field "${esc.f}" state ${esc.st}`);
       await p.evaluate(() => window.__osci.setState({ bpm: 138, bpmText: undefined }));
     }
     ok('all loops are 32 beats', list.every(l => l.beats === 32));

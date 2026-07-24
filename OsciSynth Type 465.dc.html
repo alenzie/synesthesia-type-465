@@ -94,7 +94,7 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
     <sc-for list="{{syncBtns}}" as="sb" hint-placeholder-count="6"><div onClick="{{sb.toggle}}" title="Sync this motion cycle to the tempo — its knob becomes a note-division selector" style="{{sb.style}}">{{sb.label}}</div></sc-for>
     <div style="width:1px;height:20px;background:#a49e8c;margin:0 2px"></div>
     <div style="font:600 7.5px 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#4a463a">BPM</div>
-    <input type="number" min="20" max="300" step="any" inputmode="decimal" value="{{bpmVal}}" onInput="{{bpmChange}}" onBlur="{{bpmCommit}}" title="Manual BPM (used when no MIDI is playing)" style="width:56px;padding:5px 6px;border-radius:4px;border:1px solid #8f8a77;background:#17160f;color:#ffb454;font:500 8.5px 'IBM Plex Mono',monospace;outline:none;text-align:center">
+    <input type="text" inputmode="decimal" value="{{bpmVal}}" onInput="{{bpmChange}}" onFocus="{{bpmFocus}}" onBlur="{{bpmCommit}}" onKeyDown="{{bpmKey}}" title="Manual BPM (used when no MIDI is playing) — select-all + type + Enter to set" style="width:56px;padding:5px 6px;border-radius:4px;border:1px solid #8f8a77;background:#17160f;color:#ffb454;font:500 8.5px 'IBM Plex Mono',monospace;outline:none;text-align:center">
     <div style="font:500 7.5px 'IBM Plex Mono',monospace;letter-spacing:.12em;color:#8a8574">{{tempoSrcInfo}}</div>
     <sc-if value="{{loopAvail}}" hint-placeholder-val="{{ true }}">
       <div style="width:1px;height:20px;background:#a49e8c;margin:0 2px"></div>
@@ -553,6 +553,7 @@ class SynthCore {
     for(let i=0;i<this.MAXV;i++)this.voices.push({note:-1,freq:50,gate:false,env:0,vel:1,px:0,py:0,pz:0,s:0,age:0,lx:0.4,ly:0.2,lz:12,_peak:false,wtPh:0});
     this.voiceAge=0;
     this.fmPh=0; this.lfoPh=0; this.morphPh=0; this.ax=0; this.ay=0; this.az=0; this._mEff=undefined;
+    this._xHarmEff=undefined; this._yHarmEff=undefined; this._zHarmEff=undefined;
     this.lpX=0; this.lpY=0; this.curGain=0; this.svLX=0; this.svBX=0; this.svLY=0; this.svBY=0;
     this.midiEvents=[]; this.midiDur=0; this.evIdx=0; this.songTime=0; this.midiPlaying=false; this.midiBpm=120;
     this.samplePos=0;
@@ -739,15 +740,18 @@ class SynthCore {
   setPlaying(on){ this.midiPlaying=on&&this.midiEvents.length>0; if(!on)this.allNotesOff(); this.notes.playingChanged=true; }
   shape(v,finc){
     const TAU=this.TAU,P=this.P,gen=this.gen; let x,y,z; const m=(this._mEff!==undefined?this._mEff:P.morph);
-    if(gen==='lissajous'){ x=Math.sin(TAU*v.px); y=Math.sin(TAU*(v.py+P.phOff)); z=P.zHarm>0?Math.sin(TAU*v.pz):0; }
-    else if(gen==='hyperstar'){ const th=TAU*v.s; const r=(1-m)+m*Math.cos(P.xHarm*th); x=r*Math.cos(th); y=r*Math.sin(th); z=0.45*Math.sin(P.yHarm*th)*m; }
-    else if(gen==='cube'){ const u=(v.s-Math.floor(v.s))*16; const i=u|0,f=u-i; const a=this.CV[this.TOUR[i]],b=this.CV[this.TOUR[(i+1)&15]]; const rip=Math.sin(TAU*f*P.xHarm)*0.12*m; x=(a[0]+(b[0]-a[0])*f)*0.62+rip; y=(a[1]+(b[1]-a[1])*f)*0.62+rip*0.6; z=(a[2]+(b[2]-a[2])*f)*0.62; }
-    else if(gen==='torus'){ const th=TAU*v.s,tube=0.15+m*0.75; const r=Math.cos(P.yHarm*th)*tube+1.6; x=r*Math.cos(P.xHarm*th)*0.5; y=r*Math.sin(P.xHarm*th)*0.5; z=Math.sin(P.yHarm*th)*tube*1.15; }
-    else if(gen==='spiro'){ const th=TAU*v.s; const k=Math.max(0.25,P.xHarm); const r=1/(1+k); const d=r*(0.2+m*1.6); x=((1-r)*Math.cos(th)+d*Math.cos(k*th))*0.72; y=((1-r)*Math.sin(th)-d*Math.sin(k*th))*0.72; z=0.4*Math.sin(P.yHarm*th)*m; }
-    else if(gen==='helix'){ const phi=TAU*v.s; const c=v.s/(2*Math.max(P.xHarm,0.25)); const fr=c-Math.floor(c); const yy=fr<0.5?(4*fr-1):(3-4*fr); const flip=fr<0.5?0:Math.PI; const rr=0.5+0.3*m*Math.cos(TAU*v.s*P.yHarm*0.5); x=rr*Math.cos(phi+flip); z=rr*Math.sin(phi+flip); y=yy*0.8; }
-    else if(gen==='mobius'){ const th=TAU*v.s; const w=(0.22+0.42*m)*(1+0.25*Math.sin(P.yHarm*th)); const half=P.xHarm*th*0.5; const rr=1+w*Math.cos(half); x=rr*Math.cos(th)*0.55; y=rr*Math.sin(th)*0.55; z=w*Math.sin(half)*1.1; }
-    else if(gen==='super'){ const th=TAU*v.s; const n1=0.3+m*3; const a=Math.pow(Math.abs(Math.cos(P.xHarm*th/4)),1.7)+Math.pow(Math.abs(Math.sin(P.xHarm*th/4)),1.7); let r=Math.pow(a,-1/n1); if(r>2.2)r=2.2; x=r*Math.cos(th)*0.6; y=r*Math.sin(th)*0.6; z=0.35*Math.sin(P.yHarm*th)*m; }
-    else if(gen==='butterfly'){ const th=TAU*v.s; const r=Math.exp(Math.sin(th))-2*Math.cos(P.xHarm*th)+m*Math.pow(Math.sin((2*th-Math.PI)/24),5); x=r*Math.sin(th)*0.23; y=(r*Math.cos(th)-0.6)*0.23; z=0.3*Math.sin(P.yHarm*th*0.5); }
+    // LFO->X/Y/Z HARM rides these effective values (render() sets them each sample); every generator
+    // below reads xH/yH/zH instead of P.xHarm/yHarm/zHarm so the routing works regardless of generator.
+    const xH=(this._xHarmEff!==undefined?this._xHarmEff:P.xHarm), yH=(this._yHarmEff!==undefined?this._yHarmEff:P.yHarm), zH=(this._zHarmEff!==undefined?this._zHarmEff:P.zHarm);
+    if(gen==='lissajous'){ x=Math.sin(TAU*v.px); y=Math.sin(TAU*(v.py+P.phOff)); z=zH>0?Math.sin(TAU*v.pz):0; }
+    else if(gen==='hyperstar'){ const th=TAU*v.s; const r=(1-m)+m*Math.cos(xH*th); x=r*Math.cos(th); y=r*Math.sin(th); z=0.45*Math.sin(yH*th)*m; }
+    else if(gen==='cube'){ const u=(v.s-Math.floor(v.s))*16; const i=u|0,f=u-i; const a=this.CV[this.TOUR[i]],b=this.CV[this.TOUR[(i+1)&15]]; const rip=Math.sin(TAU*f*xH)*0.12*m; x=(a[0]+(b[0]-a[0])*f)*0.62+rip; y=(a[1]+(b[1]-a[1])*f)*0.62+rip*0.6; z=(a[2]+(b[2]-a[2])*f)*0.62; }
+    else if(gen==='torus'){ const th=TAU*v.s,tube=0.15+m*0.75; const r=Math.cos(yH*th)*tube+1.6; x=r*Math.cos(xH*th)*0.5; y=r*Math.sin(xH*th)*0.5; z=Math.sin(yH*th)*tube*1.15; }
+    else if(gen==='spiro'){ const th=TAU*v.s; const k=Math.max(0.25,xH); const r=1/(1+k); const d=r*(0.2+m*1.6); x=((1-r)*Math.cos(th)+d*Math.cos(k*th))*0.72; y=((1-r)*Math.sin(th)-d*Math.sin(k*th))*0.72; z=0.4*Math.sin(yH*th)*m; }
+    else if(gen==='helix'){ const phi=TAU*v.s; const c=v.s/(2*Math.max(xH,0.25)); const fr=c-Math.floor(c); const yy=fr<0.5?(4*fr-1):(3-4*fr); const flip=fr<0.5?0:Math.PI; const rr=0.5+0.3*m*Math.cos(TAU*v.s*yH*0.5); x=rr*Math.cos(phi+flip); z=rr*Math.sin(phi+flip); y=yy*0.8; }
+    else if(gen==='mobius'){ const th=TAU*v.s; const w=(0.22+0.42*m)*(1+0.25*Math.sin(yH*th)); const half=xH*th*0.5; const rr=1+w*Math.cos(half); x=rr*Math.cos(th)*0.55; y=rr*Math.sin(th)*0.55; z=w*Math.sin(half)*1.1; }
+    else if(gen==='super'){ const th=TAU*v.s; const n1=0.3+m*3; const a=Math.pow(Math.abs(Math.cos(xH*th/4)),1.7)+Math.pow(Math.abs(Math.sin(xH*th/4)),1.7); let r=Math.pow(a,-1/n1); if(r>2.2)r=2.2; x=r*Math.cos(th)*0.6; y=r*Math.sin(th)*0.6; z=0.35*Math.sin(yH*th)*m; }
+    else if(gen==='butterfly'){ const th=TAU*v.s; const r=Math.exp(Math.sin(th))-2*Math.cos(xH*th)+m*Math.pow(Math.sin((2*th-Math.PI)/24),5); x=r*Math.sin(th)*0.23; y=(r*Math.cos(th)-0.6)*0.23; z=0.3*Math.sin(yH*th*0.5); }
     else if(gen==='wavetable'){
       const wt=this.wtActive();                       // absent hash => built-in (the availability rule)
       v.wtPh=this._wrap01(v.wtPh+finc);               // BASE increment only: xHarm/yHarm are inert here
@@ -764,7 +768,7 @@ class SynthCore {
                         :this._wtSample(wt,'L',fA,fB,ff,this._wrap01(v.wtPh+P.phOff),lod))*trim;
       z=0;
     }
-    else { const dt=Math.min(0.013,finc*(0.25+P.xHarm*0.12)); const rho=18+m*30; let lx=v.lx,ly=v.ly,lz=v.lz; lx+=dt*10*(ly-lx); ly+=dt*(v.lx*(rho-lz)-ly); lz+=dt*(v.lx*v.ly-(8/3)*lz); if(!isFinite(lx+ly+lz)||Math.abs(lx)>1e3){lx=0.4;ly=0.2;lz=12;} v.lx=lx;v.ly=ly;v.lz=lz; x=lx/22; y=(lz-(rho-1))/26; z=ly/26; }
+    else { const dt=Math.min(0.013,finc*(0.25+xH*0.12)); const rho=18+m*30; let lx=v.lx,ly=v.ly,lz=v.lz; lx+=dt*10*(ly-lx); ly+=dt*(v.lx*(rho-lz)-ly); lz+=dt*(v.lx*v.ly-(8/3)*lz); if(!isFinite(lx+ly+lz)||Math.abs(lx)>1e3){lx=0.4;ly=0.2;lz=12;} v.lx=lx;v.ly=ly;v.lz=lz; x=lx/22; y=(lz-(rho-1))/26; z=ly/26; }
     this._sx=x; this._sy=y; this._sz=z;
   }
   render(L,R,n){
@@ -810,9 +814,20 @@ class SynthCore {
       const _lfoHz=P.lfoSync?divHz(P.lfoDivision):P.lfoRate;
       this.lfoPh=this._wrap01(this.lfoPh+_lfoHz/sr); const lfo=Math.sin(TAU*this.lfoPh)*P.lfoDepth, lt=P.lfoTarget|0;
       if(P.morphSync){ this.morphPh=this._wrap01(this.morphPh+divHz(P.morphDivision)/sr); this._mEff=this.morphPh<0.5?this.morphPh*2:2-this.morphPh*2; } else this._mEff=Math.max(0,Math.min(1,P.morph+(lt===1?lfo*0.5:0)));
-      this.ax=(this.ax+(P.rotXSync?TAU*divHz(P.rotXDivision)/sr:P.rotX*ROT))%TAU;
-      this.ay=(this.ay+(P.rotYSync?TAU*divHz(P.rotYDivision)/sr:P.rotY*ROT))%TAU;
-      this.az=(this.az+(P.rotZSync?TAU*divHz(P.rotZDivision)/sr:P.rotZ*ROT))%TAU;
+      // LFO->X/Y/Z HARM: same bipolar-add-then-clamp convention as MORPH above, swing = half the knob's own range
+      this._xHarmEff=Math.max(0.25,Math.min(16,P.xHarm+(lt===5?lfo*7.875:0)));
+      this._yHarmEff=Math.max(0.25,Math.min(16,P.yHarm+(lt===6?lfo*7.875:0)));
+      this._zHarmEff=Math.max(0,Math.min(8,P.zHarm+(lt===7?lfo*4:0)));
+      // LFO->ROT X/Y/Z: same bipolar-add-then-clamp convention as MORPH/HARM above; swing = 1.0,
+      // half the knob's own -1..1 range. Modulates the FREE-RUN rotation speed; the tempo-synced
+      // branch stays locked to the grid. Untargeted axes pass P.rot* through untouched (no clamp) so
+      // every existing patch renders byte-identical — the golden/equiv guards see no change.
+      const rotXe=(lt===8)?Math.max(-1,Math.min(1,P.rotX+lfo)):P.rotX;
+      const rotYe=(lt===9)?Math.max(-1,Math.min(1,P.rotY+lfo)):P.rotY;
+      const rotZe=(lt===10)?Math.max(-1,Math.min(1,P.rotZ+lfo)):P.rotZ;
+      this.ax=(this.ax+(P.rotXSync?TAU*divHz(P.rotXDivision)/sr:rotXe*ROT))%TAU;
+      this.ay=(this.ay+(P.rotYSync?TAU*divHz(P.rotYDivision)/sr:rotYe*ROT))%TAU;
+      this.az=(this.az+(P.rotZSync?TAU*divHz(P.rotZDivision)/sr:rotZe*ROT))%TAU;
       const cY=Math.cos(this.ay),sY=Math.sin(this.ay),cX=Math.cos(this.ax),sX=Math.sin(this.ax),cZ=Math.cos(this.az),sZ=Math.sin(this.az);
       let sumX=0,sumY=0,nact=0;
       for(let vi=0;vi<this.MAXV;vi++){
@@ -821,9 +836,9 @@ class SynthCore {
         if(v.env<0.0005)continue;
         nact++;
         const f=v.freq*P.drawSpd*fmMod*(lt===3?(1+lfo*0.06):1), det=P.detune*0.03;
-        v.px=this._wrap01(v.px+f*P.xHarm*(1+det)/sr);
-        v.py=this._wrap01(v.py+f*P.yHarm*(1-det)/sr);
-        v.pz=this._wrap01(v.pz+f*P.zHarm*(1+det*0.5)/sr);
+        v.px=this._wrap01(v.px+f*this._xHarmEff*(1+det)/sr);
+        v.py=this._wrap01(v.py+f*this._yHarmEff*(1-det)/sr);
+        v.pz=this._wrap01(v.pz+f*this._zHarmEff*(1+det*0.5)/sr);
         v.s+=f/sr;
         this.shape(v,f/sr);
         let x=this._sx,y=this._sy,z=this._sz;
@@ -884,7 +899,7 @@ class Component extends DCLogic {
       ['mod','width','WIDTH',0,1,0.001,0, v=>(v*100).toFixed(0)+'%'],
       ['lfo','lfoRate','LFO RATE',0.01,20,0.01,2, v=>v.toFixed(3)+' Hz'],
       ['lfo','lfoDepth','LFO DEPTH',0,1,0.001,0, v=>(v*100).toFixed(0)+'%'],
-      ['lfo','lfoTarget','LFO →',0,4,1,0, v=>['OFF','MORPH','CUTOFF','PITCH','AMP'][v|0]||'OFF'],
+      ['lfo','lfoTarget','LFO →',0,7,1,0, v=>['OFF','MORPH','CUTOFF','PITCH','AMP','X HARM','Y HARM','Z HARM'][v|0]||'OFF'],
       ['rot','rotX','ROT X',-1,1,0.001,-0.55, v=>v.toFixed(3)],
       ['rot','rotY','ROT Y',-1,1,0.001,0.8, v=>v.toFixed(3)],
       ['rot','rotZ','ROT Z',-1,1,0.001,0.5, v=>v.toFixed(3)],
@@ -1676,7 +1691,7 @@ class Component extends DCLogic {
       const DISCRETE={lfoTarget:1,traceN:1};
       this.CTLS.forEach(c=>put(c[1],{section:c[0],label:c[2],min:c[3],max:c[4],step:c[5],default:c[6],format:c[7],
         skew:LOGISH[c[1]]?(c[3]>0?'log':'zeroLog'):'lin', kneeHz:0.1,
-        isDiscrete:!!DISCRETE[c[1]], choices:(c[1]==='lfoTarget')?['OFF','MORPH','CUTOFF','PITCH','AMP']:null}));
+        isDiscrete:!!DISCRETE[c[1]], choices:(c[1]==='lfoTarget')?['OFF','MORPH','CUTOFF','PITCH','AMP','X HARM','Y HARM','Z HARM']:null}));
       put('master',{label:'MASTER',min:0,max:1,step:0.001,default:0.5,unit:'',format:v=>(v*100).toFixed(0)+'%'});
       put('eqMix',{section:'eq',label:'EQ MIX',min:0,max:1,step:0.001,default:1,format:v=>(v*100).toFixed(0)+'%'});
       put('eqOut',{section:'eq',label:'EQ OUT',min:-24,max:24,step:0.1,default:0,unit:'dB',format:v=>v.toFixed(1)+' dB'});
@@ -1726,7 +1741,7 @@ class Component extends DCLogic {
   undo(){ this._eqFlushWheel(); if(!this.undoStack.length)return; this.redoStack.push(this.snapshot()); this.applySnapshot(this.undoStack.pop()); }
   redo(){ this._eqFlushWheel(); if(!this.redoStack.length)return; this.undoStack.push(this.snapshot()); this.applySnapshot(this.redoStack.pop()); }
   // --- Phase 0: presets -----------------------------------------------------
-  _clampParam(id,v){ const d=this._pdesc(id); if(!d)return v; if(typeof v!=='number'||!isFinite(v))return this.P[id]; v=Math.max(d.min,Math.min(d.max,v)); if(d.isDiscrete&&d.step>0)v=Math.round(v/d.step)*d.step; return v; }
+  _clampParam(id,v){ const d=this._pdesc(id); if(!d)return v; if(d.skew==='bool')return !!v; if(typeof v!=='number'||!isFinite(v))return this.P[id]; v=Math.max(d.min,Math.min(d.max,v)); if(d.isDiscrete&&d.step>0)v=Math.round(v/d.step)*d.step; return v; }
   _defaultParams(){ const p={master:0.5,fmSync:false,fmDivision:6,eqMix:1,eqOut:0,lfoSync:false,lfoDivision:6,morphSync:false,morphDivision:6,rotXSync:false,rotXDivision:6,rotYSync:false,rotYDivision:6,rotZSync:false,rotZDivision:6}; this.CTLS.forEach(c=>{ p[c[1]]=c[6]; }); return p; }
   _curBank(){ return (this.banks[this.curBankKey]||[]).filter(p=>p&&(p.synth||p.params||(p.eq&&Array.isArray(p.eq.bands)))); }
   applyPreset(p,record){
@@ -2307,14 +2322,26 @@ class Component extends DCLogic {
       /* The field shows the RAW text while you type. Clamping every keystroke on a controlled input
        * destroyed typed entry: "1"->20, then "3" appended to "20" gives 203, then 300 — so "134.685"
        * ended up as 300 and a decimal point could never survive. The engine follows only values that
-       * are already valid; the text is clamped and normalized on blur. */
+       * are already valid; the text is clamped and normalized on blur (or Enter). type="text" (not
+       * "number") is load-bearing here — the native number widget fights free-form select-all-and-
+       * retype editing regardless of what the clamp logic above does, since it re-sanitizes on every
+       * value assignment even when the string is unchanged. */
       bpmVal:(s.bpmText!==undefined?s.bpmText:String(s.bpm)),
       bpmChange:e=>{ const raw=e.target.value, v=Number(raw); const st={bpmText:raw};
-        if(raw!==''&&Number.isFinite(v)&&v>=20&&v<=300)st.bpm=v;
+        if(raw!==''&&Number.isFinite(v)&&v>=1&&v<=999)st.bpm=v;
         this.setState(st); },
       bpmCommit:e=>{ const v=Number(e.target.value);
-        const b=Number.isFinite(v)&&e.target.value!==''?Math.max(20,Math.min(300,v)):this.state.bpm;
+        const b=Number.isFinite(v)&&e.target.value!==''?Math.max(1,Math.min(999,v)):this.state.bpm;
         this.setState({bpm:b,bpmText:undefined}); },
+      bpmFocus:()=>{ this._bpmPreEdit=this.state.bpm; },  // 1..999 is wide enough that nearly every
+        // in-progress keystroke is itself a "valid" live value (bpmChange follows it into state.bpm as
+        // you type) — so by Escape time state.bpm IS the abandoned edit, not the value to revert to.
+      bpmKey:e=>{ if(e.key==='Enter'){ e.target.blur(); } else if(e.key==='Escape'){
+        const revert=this._bpmPreEdit!==undefined?this._bpmPreEdit:this.state.bpm;
+        // blur() below fires bpmCommit synchronously, which reads e.target.value — before React has
+        // had a chance to flush the setState below back to the DOM. Write the reverted string directly
+        // (and set bpm here too) so the read-back on blur can't race an abandoned in-progress value.
+        e.target.value=String(revert); this.setState({bpm:revert,bpmText:undefined}); e.target.blur(); } },
       tempoSrcInfo:(this.core.midiEvents&&this.core.midiEvents.length)?('MIDI '+(Math.round(this.midiBpm*1000)/1000)+' BPM'+(this.core.midiPlaying?' ▸':'')):'MANUAL',
       wtOn:s.gen==='wavetable',
       wtImportClick:()=>this.wtImportClick(),

@@ -38,14 +38,16 @@ ok('fmDivision snaps to an integer index', Number.isInteger(c.fromNorm('fmDivisi
 ok('traceN snaps to its 64-sample grid', c.fromNorm('traceN', 0.42) % 64 === 0, String(c.fromNorm('traceN', 0.42)));
 
 // --- 3. tempo entry accepts real-world decimal BPM --------------------------------------------
-const bpmField = /<input type="number"[^>]*value="\{\{bpmVal\}\}"/.exec(html);
-ok('BPM input exists', !!bpmField);
-ok('BPM input allows decimals (step="any")', /step="any"/.test(bpmField[0]), bpmField[0].match(/step="[^"]*"/)[0]);
+// type="text" (not "number") is load-bearing: the native number widget re-sanitizes on every value
+// assignment and fights free-form select-all-and-retype editing regardless of the app's own clamp
+// logic (see the bpmVal comment in the source). Decimal entry needs no step="any" once it's text.
+const bpmField = /<input type="text"[^>]*value="\{\{bpmVal\}\}"/.exec(html);
+ok('BPM input exists and is type="text"', !!bpmField);
 // mirror the live handler: clamp only, never round the canonical value
-c.bpmChangeTest = (v) => { const p = Number(v); return Math.max(20, Math.min(300, p)); };
+c.bpmChangeTest = (v) => { const p = Number(v); return Math.max(1, Math.min(999, p)); };
 ok('BPM 134.685 survives entry exactly', c.bpmChangeTest('134.685') === 134.685);
 ok('BPM keeps ALL entered decimals (no canonical rounding)', c.bpmChangeTest('91.5551234') === 91.5551234);
-ok('BPM still clamps to the legal range', c.bpmChangeTest('9999') === 300 && c.bpmChangeTest('1') === 20);
+ok('BPM still clamps to the legal 1..999 range', c.bpmChangeTest('9999') === 999 && c.bpmChangeTest('0') === 1);
 
 // --- 3b. canonical BPM is NOT rounded (rounding state would be the same premature discard) -----
 ok('BPM state keeps full precision (no 3-decimal rounding of the canonical value)',
