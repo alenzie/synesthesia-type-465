@@ -18,6 +18,27 @@ const ok = (n, c, d='') => { if (!c) fail++; console.log((c?'PASS':'FAIL')+'  '+
     ok('loop bundle loaded', list.length === 3, list.map(l=>l.bpm).join('/'));
     const defBpm = await p.evaluate(() => window.__osci.state.bpm);
     ok('default starting tempo is 138', defBpm === 138, String(defBpm));
+
+    // A decimal tempo must be TYPEABLE, not merely storable. The earlier precision harness called the
+    // handler with a complete value and so missed that clamping every keystroke on a controlled input
+    // turned "134.685" into 300 ("1"->20, "3" appended -> 203, -> 300).
+    {
+      const input = p.locator('input[type=number]').first();
+      await input.click({ clickCount: 3 });
+      await input.type('134.685', { delay: 40 });
+      await p.waitForTimeout(200);
+      const typed = await p.evaluate(() => ({ st: window.__osci.state.bpm, f: document.querySelector('input[type=number]').value }));
+      ok('a decimal BPM can be TYPED character by character', typed.st === 134.685, `field "${typed.f}" state ${typed.st}`);
+      await input.evaluate(el => el.blur());
+      await p.waitForTimeout(150);
+      const blurred = await p.evaluate(() => ({ st: window.__osci.state.bpm, f: document.querySelector('input[type=number]').value }));
+      ok('blur normalizes the field without losing the value', blurred.st === 134.685, `field "${blurred.f}"`);
+      // out-of-range text still clamps on commit
+      await input.click({ clickCount: 3 }); await input.type('9999', { delay: 30 });
+      await input.evaluate(el => el.blur()); await p.waitForTimeout(150);
+      ok('out-of-range entry clamps on commit', await p.evaluate(() => window.__osci.state.bpm) === 300);
+      await p.evaluate(() => window.__osci.setState({ bpm: 138, bpmText: undefined }));
+    }
     ok('all loops are 32 beats', list.every(l => l.beats === 32));
 
     // select loop 0 and play
