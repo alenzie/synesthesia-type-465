@@ -678,7 +678,10 @@ class SynthCore {
         const over=db-bd.dyn.threshDb; let target=0;
         if(over>0){ target=over*(1-1/Math.max(1,bd.dyn.ratio)); const cap=Math.abs(bd.dyn.rangeDb); if(target>cap)target=cap; }
         target*=(bd.dyn.mode==='up')?1:-1;
-        const cf=1-Math.exp(-dt/Math.max(0.0005,((target<(bd._gr||0))?bd.dyn.attackMs:bd.dyn.releaseMs)/1000));
+        // Attack applies while the gain movement GROWS, release while it returns toward 0. Testing
+        // `target < current` only works downward: with mode='up' the target is POSITIVE, so engaging
+        // (0 -> +range) picked RELEASE and letting go picked ATTACK — backwards.
+        const cf=1-Math.exp(-dt/Math.max(0.0005,((Math.abs(target)>Math.abs(bd._gr||0))?bd.dyn.attackMs:bd.dyn.releaseMs)/1000));
         bd._gr=(bd._gr||0)+(target-(bd._gr||0))*cf; bd._geff=bd.gainDb+bd._gr;
         bd._dc=this._eqCoeffs('band-pass',bd.freqHz,0,Math.max(1,bd.q),sr);
       } else { bd._gr=0; bd._geff=bd.gainDb; bd._dc=null; bd._acc=0; }
@@ -1264,7 +1267,8 @@ class Component extends DCLogic {
       if(!rec){ this._wtNote='';
         if(epoch!==undefined&&epoch!==this._wtEpoch)return;        // a newer patch owns the selection now
         this._wtMissing=ref.name||ref.hash.slice(0,12);
-        this.core.wtHash=this.core.WT_BUILTIN; this._postWk({t:'patch',p:{wtHash:this.core.WT_BUILTIN}});
+        this.core.wtHash=this.core.WT_BUILTIN; this.core.wtTrimDb=0;   // do not play the built-in at the missing table's trim
+        this._postWk({t:'patch',p:{wtHash:this.core.WT_BUILTIN,wtTrimDb:0}});
         this.setState({}); return; }
       const table={frameSize:rec.frameSize,frames:rec.frames,channels:rec.channels,
         dataL:rec.samplesL instanceof Float32Array?rec.samplesL:new Float32Array(rec.samplesL),
@@ -1275,8 +1279,11 @@ class Component extends DCLogic {
       if(!mips)return;
       mips.interp=table.meta.interp;
       this.core.wtPut(ref.hash,mips);                       // cache fill: always allowed
+      if(!this.wtSelect(ref.hash,epoch))return;             // selection: epoch-gated — a stale resolve stops here
       this._wtInfo={name:rec.name,frames:rec.frames,frameSize:rec.frameSize,channels:rec.channels,source:'stored',truncated:[],hash:ref.hash};
-      this.wtSelect(ref.hash,epoch);                        // selection: epoch-gated
+      // the preset is only fully "loaded" once its table arrived: refresh the dirty baseline
+      if(this._loadedSnap&&this._loadedSnap.wtHash!==undefined)this._loadedSnap.wtHash=ref.hash;
+      this.setState({});
     }catch(e){ this._wtNote=''; this._wtMissing=ref.name||'table'; this.setState({}); }
   }
   wtRef(){                                                   // the canonical preset reference
@@ -1764,7 +1771,7 @@ class Component extends DCLogic {
       if(typeof p.wavetable.trimDb==='number')this.core.wtTrimDb=Math.max(-24,Math.min(24,p.wavetable.trimDb));
       this.wtResolve(p.wavetable,this.wtBeginEpoch());       // async; epoch-gated selection
     } else if(this.core.wtHash!==this.core.WT_BUILTIN){
-      this.core.wtHash=this.core.WT_BUILTIN; this._wtMissing=null;  // a patch without a table plays the built-in
+      this.core.wtHash=this.core.WT_BUILTIN; this._wtMissing=null; this.core.wtTrimDb=0;  // a patch without a table plays the built-in at unity
     }
     this.state.gen=gen; const after=this.snapshot();
     if(record!==false && JSON.stringify(before)!==JSON.stringify(after))this.pushUndo(before);

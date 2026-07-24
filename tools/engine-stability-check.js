@@ -99,6 +99,39 @@ function render(setup, sr = 44100, blocks = 12) {
   ok('the clamped high cutoff still filters (not a silent bypass)', rmsOf(d2) / rmsOf(bypass) > 0.001,
      `differs from bypass by ${(rmsOf(d2) / rmsOf(bypass) * 100).toFixed(2)}% rms`);
 }
+// 4b. EQ dynamics ballistics must be symmetric: ATTACK while the gain movement grows, RELEASE while
+// it returns to 0. Testing `target < current` only works downward — with mode='up' the target is
+// POSITIVE, so engaging picked RELEASE and letting go picked ATTACK. Goldens never caught this
+// because they never drive an upward band past its threshold.
+{
+  const ramp = (mode) => {
+    const c = new Component({}); const core = c.core; core.sampleRate = 48000;
+    const dyn = { on: true, mode, threshDb: -60, ratio: 4, rangeDb: 12, attackMs: 2, releaseMs: 3000 };
+    core.eqBands = [{ type: 'bell', freqHz: 1000, gainDb: 0, q: 1, on: true, slopeDbOct: 12, muted: false, soloed: false, dyn }];
+    const gr = [];
+    for (let b = 0; b < 12; b++) { core.eqBands[0]._acc = 2048 * 0.0625; core._eqPrep(48000, 2048); gr.push(core.eqBands[0]._gr); }
+    return gr;
+  };
+  const blocksTo63 = (a) => { const t = Math.abs(a[a.length - 1]) * 0.63; for (let i = 0; i < a.length; i++) if (Math.abs(a[i]) >= t) return i + 1; return 99; };
+  const up = ramp('up'), dn = ramp('down');
+  ok('downward dynamics engage at the ATTACK rate', blocksTo63(dn) === 1, blocksTo63(dn) + ' block(s)');
+  ok('UPWARD dynamics engage at the attack rate too (not release)', blocksTo63(up) === 1, blocksTo63(up) + ' block(s)');
+  ok('both directions reach their full range', Math.abs(dn[11] + 12) < 0.01 && Math.abs(up[11] - 12) < 0.01,
+     `down ${dn[11].toFixed(2)} up ${up[11].toFixed(2)}`);
+  // and releasing must be SLOW for both
+  const release = (mode) => {
+    const c = new Component({}); const core = c.core; core.sampleRate = 48000;
+    const dyn = { on: true, mode, threshDb: -60, ratio: 4, rangeDb: 12, attackMs: 2, releaseMs: 3000 };
+    core.eqBands = [{ type: 'bell', freqHz: 1000, gainDb: 0, q: 1, on: true, slopeDbOct: 12, muted: false, soloed: false, dyn }];
+    core.eqBands[0]._acc = 2048 * 0.0625; core._eqPrep(48000, 2048);       // engage
+    const peak = core.eqBands[0]._gr;
+    core.eqBands[0]._acc = 0; core._eqPrep(48000, 2048);                    // signal gone
+    return Math.abs(core.eqBands[0]._gr) / Math.abs(peak);                  // fraction still held
+  };
+  ok('both directions RELEASE slowly (release time honoured)', release('down') > 0.9 && release('up') > 0.9,
+     `down ${release('down').toFixed(3)} up ${release('up').toFixed(3)} of peak retained after one block`);
+}
+
 // 5. the stability bound itself, checked directly against the pole condition
 {
   let violations = 0;
