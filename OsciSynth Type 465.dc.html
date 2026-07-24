@@ -387,6 +387,115 @@ function parseWavetable(buf){
   if(ambiguous)meta.ambiguous=true;
   return finish(frameSize,frames,channels,dataL,dataR,meta);
 }
+/* ---------------------------------------------------------------------------
+ * Wavetable mip pyramid (C2) — page/worker side ONLY, never in SynthCore/worklet.
+ *
+ * NORMALIZATION CONTRACT (the C++ port must match this within tolerance):
+ *   - wtFFT is UNSCALED in both directions.
+ *   - Level k has frame length Nk = N >> k, for k = 0 .. while Nk >= 8.
+ *   - Level k retains harmonics 1 .. floor(Nk/2)-1 of the ORIGINAL spectrum and
+ *     zeroes DC and Nyquist at EVERY level, level 0 included. So level 0 is the
+ *     original minus its DC and Nyquist components — not a byte copy.
+ *   - The inverse is scaled by 1/N (the ORIGINAL frame length, not Nk), which is
+ *     what makes a retained harmonic keep its amplitude at every level.
+ * ------------------------------------------------------------------------- */
+var WT_MIP_ALGO_VERSION = 1;
+var _wtTwiddle = {};
+function wtTwiddles(n){
+  let t=_wtTwiddle[n];
+  if(!t){ const c=new Float64Array(n/2), s=new Float64Array(n/2);
+    for(let i=0;i<n/2;i++){ const a=-2*Math.PI*i/n; c[i]=Math.cos(a); s[i]=Math.sin(a); }
+    t=_wtTwiddle[n]={c,s}; }
+  return t;
+}
+function wtFFT(re,im,inverse){
+  const n=re.length;
+  for(let i=1,j=0;i<n;i++){
+    let bit=n>>1;
+    for(;j&bit;bit>>=1)j^=bit;
+    j^=bit;
+    if(i<j){ let t=re[i];re[i]=re[j];re[j]=t; t=im[i];im[i]=im[j];im[j]=t; }
+  }
+  const {c,s}=wtTwiddles(n);
+  for(let len=2;len<=n;len<<=1){
+    const half=len>>1, step=n/len;
+    for(let i=0;i<n;i+=len){
+      for(let k=0,ti=0;k<half;k++,ti+=step){
+        const wr=c[ti], wi=inverse?-s[ti]:s[ti];
+        const xr=re[i+k+half], xi=im[i+k+half];
+        const vr=xr*wr-xi*wi, vi=xr*wi+xi*wr;
+        const ur=re[i+k], ui=im[i+k];
+        re[i+k]=ur+vr; im[i+k]=ui+vi;
+        re[i+k+half]=ur-vr; im[i+k+half]=ui-vi;
+      }
+    }
+  }
+}
+function wtMipLevelSizes(frameSize){
+  const out=[]; for(let nk=frameSize; nk>=8; nk>>=1)out.push(nk);
+  return out.length?out:[frameSize];
+}
+function buildWavetableMips(table){
+  const N=table.frameSize, frames=table.frames, sizes=wtMipLevelSizes(N);
+  const chans=[table.dataL].concat(table.dataR?[table.dataR]:[]);
+  const levels=sizes.map(nk=>({frameSize:nk, L:new Float32Array(nk*frames), R:table.dataR?new Float32Array(nk*frames):null}));
+  const re=new Float64Array(N), im=new Float64Array(N);
+  for(let ci=0;ci<chans.length;ci++){
+    const src=chans[ci], key=ci===0?'L':'R';
+    for(let f=0;f<frames;f++){
+      const off=f*N;
+      for(let i=0;i<N;i++){ re[i]=src[off+i]; im[i]=0; }
+      wtFFT(re,im,false);
+      for(let li=0;li<sizes.length;li++){
+        const nk=sizes[li], keep=(nk>>1)-1;              // harmonics 1..Nk/2-1
+        const lr=new Float64Array(nk), lim=new Float64Array(nk);
+        for(let h=1;h<=keep;h++){
+          lr[h]=re[h];       lim[h]=im[h];               // positive frequency
+          lr[nk-h]=re[N-h];  lim[nk-h]=im[N-h];          // conjugate partner
+        }
+        // lr[0] (DC) and lr[nk/2] (Nyquist) stay zero — by contract, at every level.
+        wtFFT(lr,lim,true);
+        const dst=levels[li][key], doff=f*nk, g=1/N;      // 1/N, NOT 1/Nk — preserves amplitude
+        for(let i=0;i<nk;i++)dst[doff+i]=lr[i]*g;
+      }
+    }
+  }
+  return {frameSize:N, frames, channels:table.channels, levels, mipAlgoVersion:WT_MIP_ALGO_VERSION};
+}
+/* Import-time mip build, off the UI thread when the environment allows. Worker construction is
+ * PROBED exactly like the worklet module was (data: first — a blob: worker is blocked on some
+ * file:// origins), and falls back to a synchronous main-thread build so correctness never
+ * depends on the worker: only jank does. The table is structure-CLONED to the worker (never
+ * transferred) — the main thread keeps the raw samples for hashing and storage. */
+function wtWorkerSource(){
+  return 'var WT_MIP_ALGO_VERSION='+WT_MIP_ALGO_VERSION+';\n'+
+    'var _wtTwiddle={};\n'+wtTwiddles.toString()+'\n'+wtFFT.toString()+'\n'+
+    wtMipLevelSizes.toString()+'\n'+buildWavetableMips.toString()+'\n'+
+    'self.onmessage=function(e){ try{ var m=buildWavetableMips(e.data); var tr=[];\n'+
+    '  for(var i=0;i<m.levels.length;i++){ tr.push(m.levels[i].L.buffer); if(m.levels[i].R)tr.push(m.levels[i].R.buffer); }\n'+
+    '  self.postMessage({ok:true,mips:m},tr); }catch(err){ self.postMessage({ok:false,error:String(err&&err.message||err)}); } };';
+}
+function buildWavetableMipsAsync(table){
+  return new Promise(resolve=>{
+    const src=wtWorkerSource();
+    const done=(m)=>resolve(m);
+    const fallback=()=>{ try{ done(buildWavetableMips(table)); }catch(e){ resolve(null); } };
+    let w=null, settled=false;
+    const tryUrl=(url,revoke)=>{
+      try{ w=new Worker(url); }catch(e){ if(revoke)URL.revokeObjectURL(url); return false; }
+      const to=setTimeout(()=>{ if(!settled){ settled=true; try{w.terminate();}catch(e){} fallback(); } },30000);
+      w.onmessage=e=>{ if(settled)return; settled=true; clearTimeout(to); try{w.terminate();}catch(x){} if(revoke)URL.revokeObjectURL(url);
+        if(e.data&&e.data.ok)done(e.data.mips); else fallback(); };
+      w.onerror=()=>{ if(settled)return; settled=true; clearTimeout(to); try{w.terminate();}catch(x){} if(revoke)URL.revokeObjectURL(url); fallback(); };
+      w.postMessage({frameSize:table.frameSize,frames:table.frames,channels:table.channels,dataL:table.dataL,dataR:table.dataR});
+      return true;
+    };
+    if(typeof Worker==='undefined'){ fallback(); return; }
+    if(tryUrl('data:text/javascript;base64,'+btoa(unescape(encodeURIComponent(src))),false))return;
+    try{ if(tryUrl(URL.createObjectURL(new Blob([src],{type:'text/javascript'})),true))return; }catch(e){}
+    fallback();
+  });
+}
 /* ============================================================================
  * SynthCore — the ENTIRE audio engine as one self-contained, allocation-free
  * class (Phase 1). No DOM/window/dc-runtime references: it runs on the main
