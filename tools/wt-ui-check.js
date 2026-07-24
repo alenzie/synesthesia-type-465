@@ -86,9 +86,23 @@ const ok = (n, c, d = '') => { if (!c) fail++; console.log((c ? 'PASS' : 'FAIL')
     // ambiguous frame size -> chooser offered
     await importFixture(p, 'noclm-2x2048.wav');
     await p.waitForTimeout(300);
-    const amb = await p.evaluate(() => ({ pending: !!window.__osci._wtPending, info: window.__osci._wtInfo }));
-    ok('no-clm file either resolves or offers a frame-size chooser', amb.pending || !!amb.info,
-       amb.pending ? 'chooser offered' : 'resolved to ' + amb.info.frameSize);
+    const amb = await p.evaluate(() => ({ pending: window.__osci._wtPending, info: window.__osci._wtInfo,
+                                          hash: window.__osci.core.wtHash, builtin: window.__osci.core.WT_BUILTIN }));
+    // 'pending || info' was a tautology — one of them is always set. Require the chooser itself.
+    ok('no-clm file offers a frame-size chooser', !!amb.pending && amb.pending.cands.length > 1,
+       amb.pending ? amb.pending.cands.join('/') : 'NO CHOOSER');
+    ok('the guessed table is loaded meanwhile (not a dead panel)', !!amb.info && amb.hash !== amb.builtin,
+       amb.info ? amb.info.frames + 'x' + amb.info.frameSize : 'none');
+    // picking a different size must re-parse THAT file's own buffer
+    const picked = await p.evaluate(async () => {
+      const o = window.__osci, alt = o._wtPending.cands.find(c => c !== o._wtInfo.frameSize) || o._wtPending.cands[0];
+      const before = o._wtDone || 0;
+      o.wtPickFrameSize(alt);
+      for (let i = 0; i < 100 && (o._wtDone || 0) === before; i++) await new Promise(r => setTimeout(r, 100));
+      return { want: alt, got: o._wtInfo && o._wtInfo.frameSize, source: o._wtInfo && o._wtInfo.source };
+    });
+    ok('choosing a frame size re-parses at that size', picked.got === picked.want && picked.source === 'user',
+       picked.want + ' -> ' + picked.got);
 
     // ---- C4: storage + preset references ----
     // Clear the marker FIRST: waiting on a predicate the previous fixture already satisfies

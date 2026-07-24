@@ -1285,35 +1285,43 @@ class Component extends DCLogic {
       channels:m?m.channels:1, interp:(m&&m.interp)||{raw:1,play:1}, trimDb:this.core.wtTrimDb};
   }
   wtImportClick(){ if(this._refs.wtFileRef)this._refs.wtFileRef.click(); }
-  async wtImportFile(file,forceFrameSize){
+  async wtImportFile(file,forceFrameSize,srcBuf){
     if(!file)return;
+    // The epoch is claimed BEFORE any await. Taking it later would let a slow earlier import claim a
+    // HIGHER epoch than the import that superseded it, and win — exactly backwards.
+    const epoch=this.wtBeginEpoch();
+    const stale=()=>epoch!==this._wtEpoch;
     this._wtBusy=true; this._wtErr=''; this._wtNote='reading '+file.name+'\u2026'; this.setState({});
     try{
-      const buf=this._wtLastBuf&&this._wtLastName===file.name?this._wtLastBuf:await file.arrayBuffer();
-      this._wtLastBuf=buf; this._wtLastName=file.name;
+      const buf=srcBuf||await file.arrayBuffer();
       const t=parseWavetable(buf,forceFrameSize);
-      this._wtPending=(t.meta.ambiguous&&!forceFrameSize)?{name:file.name,cands:t.meta.candidates}:null;
+      // the chooser carries its OWN buffer, so a later import cannot swap what a pending choice parses
+      const pending=(t.meta.ambiguous&&!forceFrameSize)?{name:file.name,cands:t.meta.candidates,buf}:null;
       this._wtNote='building mip levels\u2026'; this.setState({});
       if(!this.ctx)this.ctx=new (window.AudioContext||window.webkitAudioContext)();
-      const epoch=this.wtBeginEpoch();
       const mips=await buildWavetableMipsAsync(t);
+      if(stale()){ this._wtBusy=false; this._wtNote=''; this.setState({}); return; }
       if(!mips)throw new Error('mip build failed');
       mips.interp=t.meta.interp;
       const hash=wtHashTable(t);
-      this.core.wtPut(hash,mips);
+      this.core.wtPut(hash,mips);                                     // cache fill: always allowed
+      await this.wtSave(hash,t);                                      // persist BEFORE reporting success
+      if(stale()){ this._wtBusy=false; this._wtNote=''; this.setState({}); return; }
+      // only now that this import has WON may it touch the visible state
+      this._wtPending=pending;
       this._wtInfo={name:file.name.replace(/\.[^.]+$/,''),frames:t.frames,frameSize:t.frameSize,
         channels:t.channels,source:t.meta.source,truncated:t.meta.truncated.slice(),hash};
       this._wtNote=''; this._wtBusy=false;
-      await this.wtSave(hash,t);                                      // persist BEFORE reporting success
-      if(!this.wtSelect(hash,epoch)){ this.setState({}); return; }   // a newer import won — drop this one
+      if(!this.wtSelect(hash,epoch)){ this.setState({}); return; }
       if(this.state.gen!=='wavetable')this.setState({gen:'wavetable'});
-      this._wtDone=(this._wtDone||0)+1;   // monotonic completion marker: the table is cached, stored AND selected
+      this._wtDone=(this._wtDone||0)+1;   // monotonic completion marker: cached, stored AND selected
     }catch(err){
+      if(stale())return;                                              // a superseded import stays silent
       this._wtBusy=false; this._wtNote=''; this._wtErr=String(err&&err.message||err);
       this.setState({});
     }
   }
-  wtPickFrameSize(fs){ const p=this._wtPending; if(!p)return; this._wtPending=null; this.wtImportFile({name:p.name,arrayBuffer:()=>Promise.resolve(this._wtLastBuf)},fs); }
+  wtPickFrameSize(fs){ const p=this._wtPending; if(!p)return; this._wtPending=null; this.wtImportFile({name:p.name},fs,p.buf); }
   _drawWtStrip(){
     const cv=this._refs.wtStripRef; if(!cv||this.state.gen!=='wavetable')return;
     const DPR=Math.min(2,window.devicePixelRatio||1);
@@ -1696,8 +1704,9 @@ class Component extends DCLogic {
   formatParam(id,v){ const d=this._pdesc(id); if(!d)return String(v); try{ return d.format(v); }catch(e){ return String(v); } }
   _paramIds(){ return this.CTLS.map(c=>c[1]).concat('master','fmSync','fmDivision','eqMix','eqOut','lfoSync','lfoDivision','morphSync','morphDivision','rotXSync','rotXDivision','rotYSync','rotYDivision','rotZSync','rotZDivision'); }
   _eqPersist(bands){ return (bands||[]).map(b=>({id:b.id,type:b.type,freqHz:b.freqHz,gainDb:b.gainDb,q:b.q,on:b.on,slopeDbOct:b.slopeDbOct||12,muted:!!b.muted,soloed:!!b.soloed,end:b.end||undefined,dyn:{on:!!(b.dyn&&b.dyn.on),mode:(b.dyn&&b.dyn.mode)||'down',threshDb:b.dyn?b.dyn.threshDb:-24,ratio:b.dyn?b.dyn.ratio:2,rangeDb:b.dyn?b.dyn.rangeDb:0,attackMs:b.dyn?b.dyn.attackMs:10,releaseMs:b.dyn?b.dyn.releaseMs:120}})); }
-  snapshot(){ const p={}; this._paramIds().forEach(id=>{ p[id]=this.P[id]; }); return {params:p, gen:this.state.gen, eqBands:this._eqPersist(this.eqBands), eqSel:this.eqSel, eqTap:this.state.eqTap||'post'}; }
-  applySnapshot(s){ if(!s)return; this._mutTok++; if(s.params)this._paramIds().forEach(id=>{ if(s.params[id]!==undefined)this.P[id]=s.params[id]; }); if(s.eqBands){ this.eqBands=this._eqPersist(s.eqBands); this.core.eqBands=this.eqBands; } this.eqSel=Math.max(0,Math.min(s.eqSel!==undefined?s.eqSel:this.eqSel,Math.max(0,this.eqBands.length-1))); if(s.eqTap!==undefined&&s.eqTap!==this.state.eqTap){ for(const bd of this.eqBands){ bd._zs=null; bd._topo=null; bd._fS=undefined; } this.state.eqTap=s.eqTap; } this.setState(s.gen?{gen:s.gen}:{}); }
+  snapshot(){ const p={}; this._paramIds().forEach(id=>{ p[id]=this.P[id]; }); return {params:p, gen:this.state.gen, eqBands:this._eqPersist(this.eqBands), eqSel:this.eqSel, eqTap:this.state.eqTap||'post', wtTrimDb:this.core.wtTrimDb}; }
+  applySnapshot(s){ if(!s)return; this._mutTok++; if(s.params)this._paramIds().forEach(id=>{ if(s.params[id]!==undefined)this.P[id]=s.params[id]; }); if(s.eqBands){ this.eqBands=this._eqPersist(s.eqBands); this.core.eqBands=this.eqBands; } this.eqSel=Math.max(0,Math.min(s.eqSel!==undefined?s.eqSel:this.eqSel,Math.max(0,this.eqBands.length-1))); if(s.eqTap!==undefined&&s.eqTap!==this.state.eqTap){ for(const bd of this.eqBands){ bd._zs=null; bd._topo=null; bd._fS=undefined; } this.state.eqTap=s.eqTap; }
+    if(s.wtTrimDb!==undefined)this.core.wtTrimDb=s.wtTrimDb; this.setState(s.gen?{gen:s.gen}:{}); }
   pushUndo(before){ this.undoStack.push(before); if(this.undoStack.length>this.UNDO_MAX)this.undoStack.shift(); this.redoStack.length=0; }
   pushUndoIfChanged(before){ if(!before)return; if(JSON.stringify(before)===JSON.stringify(this.snapshot()))return; this.pushUndo(before); this.setState({}); }
   undo(){ this._eqFlushWheel(); if(!this.undoStack.length)return; this.redoStack.push(this.snapshot()); this.applySnapshot(this.undoStack.pop()); }
@@ -2298,7 +2307,7 @@ class Component extends DCLogic {
         if(this._wtErr)return '\u26a0 '+this._wtErr;
         if(this._wtMissing)return '\u26a0 table not found \u2014 re-import \u201c'+this._wtMissing+'\u201d (playing the built-in)';
         if(this._wtNote)return this._wtNote+(this._wtStoreNote?(' \u00b7 '+this._wtStoreNote):'');
-        if(this._wtPending)return 'no frame size in the file \u2014 pick one:';
+        if(this._wtPending)return 'no frame size in the file \u2014 guessed '+this._wtPending.cands[0]+', loaded; pick another if wrong:';
         const i=this._wtInfo;
         if(!i)return 'built-in basic shapes \u00b7 16 frames \u00d7 2048 \u00b7 LOAD TABLE for a Serum/Vital .wav or Surge .wt';
         const t=i.truncated&&i.truncated.length?' \u00b7 \u26a0 '+i.truncated.join('; '):'';
