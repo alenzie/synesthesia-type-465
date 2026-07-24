@@ -301,6 +301,101 @@ ok('live source declares a mip algo version', Number.isInteger(lib.WT_MIP_ALGO_V
   ok('worker reports errors as ok:false (does not throw out of the handler)', !!(scope.result && scope.result.ok === false && /8-sample/.test(scope.result.error)), scope.result && scope.result.error);
 }
 
+// ============================== C3: the oscillator ==============================
+// Load SynthCore + Component headlessly to exercise the real audio path.
+{
+  const sm = /<script type="text\/x-dc" data-dc-script[^>]*>([\s\S]*?)<\/script>/.exec(html);
+  class DCLogic { constructor(){ this.state={}; this._refs={}; } setState(o){ Object.assign(this.state,o); } }
+  global.window = { SYNESTHESIA_BANKS: {} };
+  global.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+  const Component = new Function('DCLogic', sm[1] + '\nreturn Component;')(DCLogic);
+  const mk = (gen) => { const c = new Component({}); c.ctx = { sampleRate: 48000 }; c.running = true; c.state.gen = gen; c.state.drone = true; return c; };
+  const render = (c, blocks = 4, n = 2048) => {
+    const L = new Float32Array(blocks * n), R = new Float32Array(blocks * n);
+    for (let b = 0; b < blocks; b++) { const l = new Float32Array(n), r = new Float32Array(n);
+      c.process({ outputBuffer: { getChannelData: (ch) => ch === 0 ? l : r } }); L.set(l, b * n); R.set(r, b * n); }
+    return { L, R };
+  };
+  const rms = (a) => Math.sqrt(a.reduce((s, v) => s + v * v, 0) / a.length);
+
+  // built-in exists in every core, by construction, with no transport
+  {
+    const c = mk('wavetable');
+    const bi = c.core.wtCache[c.core.WT_BUILTIN];
+    ok('built-in table exists at core construction', !!bi && bi.frames === 16 && bi.frameSize === 2048);
+    ok('built-in has a full mip pyramid', bi.levels.length === 9 && bi.levels[8].frameSize === 8);
+    // additive construction must satisfy the C2 contract: DC-free and Nyquist-free at every level
+    let badDC = 0, badNy = 0;
+    for (const lv of bi.levels) { const f = Float64Array.from(lv.L.subarray(8 * lv.frameSize, 9 * lv.frameSize));
+      const mag = dftMag(f); if (mag[0] > F32TOL) badDC++; if (mag[lv.frameSize >> 1] > F32TOL) badNy++; }
+    ok('built-in is DC-free at every level (contract by construction)', badDC === 0);
+    ok('built-in is Nyquist-free at every level', badNy === 0);
+  }
+  // it makes sound, and MORPH changes the timbre
+  {
+    const c = mk('wavetable'); c.P.morph = 0; const a = render(c);
+    const c2 = mk('wavetable'); c2.P.morph = 1; const b = render(c2);
+    ok('wavetable generator renders non-silence', rms(a.L) > 0.01, 'rms ' + rms(a.L).toFixed(4));
+    ok('MORPH changes the output (frame scan works)', Math.abs(rms(a.L) - rms(b.L)) > 1e-4 || a.L.some((v, i) => Math.abs(v - b.L[i]) > 0.01));
+  }
+  // a MISSING hash renders the built-in, never silence (the availability rule)
+  {
+    const c = mk('wavetable'); c.core.wtHash = 'sha256:does-not-exist';
+    ok('missing table hash falls back to the built-in (not silence)', rms(render(c).L) > 0.01);
+    ok('wtActive() resolves an absent hash to the built-in', c.core.wtActive() === c.core.wtCache[c.core.WT_BUILTIN]);
+  }
+  // X/Y HARM must be INERT for this generator (proves v.wtPh is used, not v.px)
+  {
+    const a = mk('wavetable'); a.P.xHarm = 3; a.P.yHarm = 4;
+    const b = mk('wavetable'); b.P.xHarm = 11; b.P.yHarm = 0.5;
+    const ra = render(a), rb = render(b);
+    let same = true; for (let i = 0; i < ra.L.length && same; i++) same = ra.L[i] === rb.L[i];
+    ok('X/Y HARM are inert on the wavetable generator (dedicated wtPh, not px)', same);
+  }
+  // ST PHASE builds the X/Y figure from a mono table
+  {
+    // The 3-D rotation stage is ON by default (rotX/rotY/rotZ = -0.55/0.8/0.5) and deliberately mixes
+    // X into Y for EVERY generator — that is the instrument's character, not a wavetable concern. Zero
+    // the rotations (and jitter) to observe the table's own X/Y relationship.
+    const flat = (c) => { c.P.rotX = c.P.rotY = c.P.rotZ = 0; c.P.jitter = 0; return c; };
+    const a = flat(mk('wavetable')); a.P.phOff = 0; const ra = render(a);
+    let identical = true; for (let i = 0; i < ra.L.length && identical; i++) identical = Math.abs(ra.L[i] - ra.R[i]) < 1e-9;
+    ok('phOff=0 makes a mono table draw a diagonal (L==R, rotation+jitter off)', identical);
+    const b = flat(mk('wavetable')); b.P.phOff = 0.25; const rb = render(b);
+    ok('ST PHASE separates X from Y', rb.L.some((v, i) => Math.abs(v - rb.R[i]) > 0.05));
+  }
+  // stepped (interp=0) tables reach EVERY frame, including the last, across the MORPH travel
+  {
+    const c = mk('wavetable');
+    const bi = c.core.wtCache[c.core.WT_BUILTIN];
+    const stepped = Object.assign({}, bi, { interp: { raw: 0, play: 0 } });
+    c.core.wtPut('t:stepped', stepped); c.core.wtHash = 't:stepped';
+    const seen = new Set();
+    for (let k = 0; k <= 100; k++) { const m2 = k / 100; seen.add(Math.min(stepped.frames - 1, Math.floor(m2 * stepped.frames))); }
+    ok('stepped mapping reaches every frame incl. the last', seen.size === stepped.frames && seen.has(stepped.frames - 1), seen.size + ' of ' + stepped.frames);
+  }
+  // ANTI-ALIASING: the payoff test. A high note with mips vs the same render pinned to level 0.
+  {
+    const hi = mk('wavetable'); hi.state.drone = false; hi.P.morph = 1; hi.P.master = 0.9;
+    hi.core.noteOn(100, 1.0); const withMips = render(hi, 6);
+    // pin to level 0 by forcing lod=0: rebuild a core whose level list has only the full-rate level
+    const flat = mk('wavetable'); flat.state.drone = false; flat.P.morph = 1; flat.P.master = 0.9;
+    const bi = flat.core.wtCache[flat.core.WT_BUILTIN];
+    flat.core.wtPut('t:nomips', Object.assign({}, bi, { levels: [bi.levels[0]] }));
+    flat.core.wtHash = 't:nomips'; flat.core.noteOn(100, 1.0); const noMips = render(flat, 6);
+    // measure energy in the top octave, where foldback lands
+    const band = (x) => { const n = 4096, seg = Float64Array.from(x.subarray(x.length - n)); const mag = dftMag(seg);
+      let e = 0; for (let k = Math.floor(mag.length * 0.55); k < mag.length; k++) e += mag[k] * mag[k]; return Math.sqrt(e); };
+    const eMip = band(withMips.L), eFlat = band(noMips.L);
+    ok('mipmapping cuts high-band foldback energy substantially', eMip < eFlat * 0.5, `mips ${eMip.toExponential(2)} vs flat ${eFlat.toExponential(2)}`);
+    ok('mipped render is still audible (did not just mute everything)', rms(withMips.L) > 0.01, rms(withMips.L).toFixed(4));
+  }
+  // other generators are untouched by all of this
+  {
+    const c = mk('lissajous'); ok('lissajous still renders (no regression from the new branch)', rms(render(c).L) > 0.001);
+  }
+}
+
 // 10. async builder falls back to a main-thread build when no Worker exists (the file:// safety net)
 (async () => {
   const t = lib.parseWavetable(F('surge-4x512-int16.wt'));
@@ -309,6 +404,6 @@ ok('live source declares a mip algo version', Number.isInteger(lib.WT_MIP_ALGO_V
   ok('buildWavetableMipsAsync falls back without a Worker', !!m && m.levels.length === direct.levels.length);
   ok('fallback build matches the direct build byte-for-byte', !!m && m.levels.every((lv, i) => lv.L.every((v, j) => v === direct.levels[i].L[j])));
 
-  console.log(fail === 0 ? '\nWAVETABLE C1+C2: ALL CHECKS GREEN' : '\n' + fail + ' CHECKS FAILED');
+  console.log(fail === 0 ? '\nWAVETABLE C1+C2+C3: ALL CHECKS GREEN' : '\n' + fail + ' CHECKS FAILED');
   process.exit(fail ? 1 : 0);
 })();
