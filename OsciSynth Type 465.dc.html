@@ -530,7 +530,7 @@ class SynthCore {
     this.samplePos=0;
     this.P={}; this.eqBands=[]; this.gen='lissajous'; this.bpm=120; this.loop=false; this.drone=false; this.eqPre=false;
     this.WT_BUILTIN='builtin:basic'; this.wtCache={}; this.wtOrder=[]; this.wtHash=this.WT_BUILTIN; this.wtTrimDb=0;
-    this.wtCache[this.WT_BUILTIN]=this._wtMakeBuiltin(); this.wtOrder.push(this.WT_BUILTIN);
+    this.wtCache[this.WT_BUILTIN]=this._wtMakeBuiltin(); // permanent; deliberately not in wtOrder
     this.sampleRate=44100;
     this.rng=Math.random;
     this.BLK=2048; this.beamX=new Float32Array(this.BLK); this.beamY=new Float32Array(this.BLK);
@@ -549,31 +549,41 @@ class SynthCore {
    * built-in whenever that hash is absent (pending transport, or a preset naming a missing table).
    * Never silence, never garbage. */
   _wtMakeBuiltin(){
-    const N=2048, frames=16, TAU=Math.PI*2, sizes=this.wtLevelSizes(N), levels=[];
-    for(const nk of sizes){
-      const data=new Float32Array(nk*frames), maxH=(nk>>1)-1;
-      for(let f=0;f<frames;f++){
-        const t=f/(frames-1), reach=1+t*63;          // harmonic sweep: sine -> rich saw
-        const odd=t>0.66?(t-0.66)/0.34:0;            // ...tilting toward odd-only (square/pulse) at the top
-        const off=f*nk;
-        for(let h=1;h<=maxH;h++){
-          let amp=reach-(h-1); if(amp<=0)break; if(amp>1)amp=1;
-          amp/=h;
-          if(h%2===0)amp*=(1-odd);                   // fade the even harmonics out
-          if(amp===0)continue;
-          for(let i=0;i<nk;i++)data[off+i]+=amp*Math.sin(TAU*h*i/nk);
-        }
-        let pk=0; for(let i=0;i<nk;i++){ const a=Math.abs(data[off+i]); if(a>pk)pk=a; }
-        if(pk>0){ const g=0.9/pk; for(let i=0;i<nk;i++)data[off+i]*=g; }
+    const N=2048, frames=16, TAU=Math.PI*2, sizes=this.wtLevelSizes(N);
+    const levels=sizes.map(nk=>({frameSize:nk,L:new Float32Array(nk*frames),R:null}));
+    for(let f=0;f<frames;f++){
+      const t=f/(frames-1), reach=1+t*63;            // harmonic sweep: sine -> rich saw
+      const odd=t>0.66?(t-0.66)/0.34:0;              // ...tilting toward odd-only (square/pulse) at the top
+      // ONE amplitude per harmonic, shared by every level, so a retained harmonic has the SAME
+      // amplitude at every level — the C2 contract. Normalization is likewise computed ONCE per
+      // frame (from the full-rate level) and applied to all levels: a per-level gain would make
+      // LOD blending change harmonic amplitude, which is exactly what the contract forbids.
+      const amps=[]; const maxH0=(N>>1)-1;
+      for(let h=1;h<=maxH0;h++){
+        let a=reach-(h-1); if(a<=0)break; if(a>1)a=1; a/=h;
+        if(h%2===0)a*=(1-odd);
+        amps[h]=a;
       }
-      levels.push({frameSize:nk,L:data,R:null});
+      let gain=1;
+      for(let li=0;li<sizes.length;li++){
+        const nk=sizes[li], maxH=(nk>>1)-1, data=levels[li].L, off=f*nk;
+        for(let h=1;h<=maxH;h++){ const a=amps[h]; if(!a)continue;
+          for(let i=0;i<nk;i++)data[off+i]+=a*Math.sin(TAU*h*i/nk); }
+        if(li===0){ let pk=0; for(let i=0;i<nk;i++){ const v=Math.abs(data[off+i]); if(v>pk)pk=v; } gain=pk>0?0.9/pk:1; }
+      }
+      for(let li=0;li<sizes.length;li++){ const nk=sizes[li], data=levels[li].L, off=f*nk;
+        for(let i=0;i<nk;i++)data[off+i]*=gain; }
     }
     return {frameSize:N,frames,channels:1,levels,mipAlgoVersion:1,interp:{raw:1,play:1}};
   }
   wtLevelSizes(frameSize){ const out=[]; for(let nk=frameSize;nk>=8;nk>>=1)out.push(nk); return out; }
-  wtPut(hash,mips){ // 2-entry LRU; the built-in is never evicted
+  wtPut(hash,mips){ // keep 2 imported tables; NEVER evict the built-in or the one currently selected
     this.wtCache[hash]=mips; this.wtOrder=this.wtOrder.filter(h=>h!==hash); this.wtOrder.push(hash);
-    while(this.wtOrder.length>2){ const drop=this.wtOrder.shift(); if(drop!==this.WT_BUILTIN)delete this.wtCache[drop]; }
+    while(this.wtOrder.length>2){
+      const i=this.wtOrder.findIndex(h=>h!==this.WT_BUILTIN&&h!==this.wtHash);
+      if(i<0)break;                                  // everything left is pinned — keep it
+      delete this.wtCache[this.wtOrder.splice(i,1)[0]];
+    }
   }
   wtActive(){ return this.wtCache[this.wtHash]||this.wtCache[this.WT_BUILTIN]; }
   _wtLevel(data,nk,fA,fB,ff,ph){
@@ -1086,8 +1096,10 @@ class Component extends DCLogic {
   }
   /* Select a table for playback. Cache fills are always allowed, but SELECTION follows only the
    * current epoch — a stale async resolution (preset A landing after preset B was loaded) is dropped. */
+  wtBeginEpoch(){ return ++this._wtEpoch; }   // call when a user action STARTS an async resolution
   wtSelect(hash,epoch){
-    if(epoch!==undefined&&epoch!==this._wtEpoch)return false;
+    if(epoch!==undefined){ if(epoch!==this._wtEpoch)return false; }  // stale resolution — drop it
+    else this._wtEpoch++;                                            // direct action starts its own epoch
     this.core.wtHash=hash; this._sendTableToWorklet(hash); this.setState({}); return true;
   }
   _sendMidiToWorklet(){ if(this._wk()&&this.core.midiEvents.length)this._postWk({t:'midi',events:this.core.midiEvents,dur:this.core.midiDur,pos:this.core.songTime||0}); }

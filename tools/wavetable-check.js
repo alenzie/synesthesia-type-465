@@ -330,6 +330,23 @@ ok('live source declares a mip algo version', Number.isInteger(lib.WT_MIP_ALGO_V
       const mag = dftMag(f); if (mag[0] > F32TOL) badDC++; if (mag[lv.frameSize >> 1] > F32TOL) badNy++; }
     ok('built-in is DC-free at every level (contract by construction)', badDC === 0);
     ok('built-in is Nyquist-free at every level', badNy === 0);
+    // AMPLITUDE CONTRACT: a retained harmonic must have the same amplitude at every level. A
+    // per-level normalization gain silently breaks this and makes LOD blending change timbre.
+    for (const fi of [0, 8, 15]) {
+      const amps = bi.levels.map(lv => dftMag(Float64Array.from(lv.L.subarray(fi * lv.frameSize, (fi + 1) * lv.frameSize)))[1]);
+      const spread = Math.max(...amps) - Math.min(...amps);
+      ok(`built-in frame ${fi}: fundamental amplitude is level-invariant`, spread < 1e-3, 'spread ' + spread.toExponential(2) + ' (' + amps[0].toFixed(4) + '..' + amps[amps.length - 1].toFixed(4) + ')');
+    }
+  }
+  // cache eviction must never drop the SELECTED table
+  {
+    const c = mk('wavetable');
+    const bi = c.core.wtCache[c.core.WT_BUILTIN];
+    c.core.wtPut('t:A', bi); c.core.wtHash = 't:A';
+    c.core.wtPut('t:B', bi); c.core.wtPut('t:C', bi);
+    ok('LRU never evicts the currently selected table', !!c.core.wtCache['t:A'] && c.core.wtActive() === c.core.wtCache['t:A']);
+    ok('LRU never evicts the built-in', !!c.core.wtCache[c.core.WT_BUILTIN]);
+    ok('LRU still bounds the cache', Object.keys(c.core.wtCache).length <= 4, Object.keys(c.core.wtCache).join(','));
   }
   // it makes sound, and MORPH changes the timbre
   {
@@ -364,15 +381,24 @@ ok('live source declares a mip algo version', Number.isInteger(lib.WT_MIP_ALGO_V
     const b = flat(mk('wavetable')); b.P.phOff = 0.25; const rb = render(b);
     ok('ST PHASE separates X from Y', rb.L.some((v, i) => Math.abs(v - rb.R[i]) > 0.05));
   }
-  // stepped (interp=0) tables reach EVERY frame, including the last, across the MORPH travel
+  // stepped (interp=0) tables: drive the PRODUCTION branch through render(), never a re-implemented
+  // formula. With 16 frames, floor(m*16) puts BOTH m=0.97 and m=1.0 on the last frame, while the
+  // wrong-but-plausible floor(m*15) would split them (14 vs 15) — so identical output at those two
+  // morph values is a real discriminator for the shipped mapping.
   {
-    const c = mk('wavetable');
-    const bi = c.core.wtCache[c.core.WT_BUILTIN];
-    const stepped = Object.assign({}, bi, { interp: { raw: 0, play: 0 } });
-    c.core.wtPut('t:stepped', stepped); c.core.wtHash = 't:stepped';
-    const seen = new Set();
-    for (let k = 0; k <= 100; k++) { const m2 = k / 100; seen.add(Math.min(stepped.frames - 1, Math.floor(m2 * stepped.frames))); }
-    ok('stepped mapping reaches every frame incl. the last', seen.size === stepped.frames && seen.has(stepped.frames - 1), seen.size + ' of ' + stepped.frames);
+    const steppedCore = (m2) => {
+      const c = mk('wavetable'); c.P.rotX = c.P.rotY = c.P.rotZ = 0; c.P.jitter = 0; c.P.morph = m2;
+      const bi = c.core.wtCache[c.core.WT_BUILTIN];
+      c.core.wtPut('t:stepped', Object.assign({}, bi, { interp: { raw: 0, play: 0 } }));
+      c.core.wtHash = 't:stepped';
+      return render(c, 2);
+    };
+    const at97 = steppedCore(0.97), at100 = steppedCore(1.0), at50 = steppedCore(0.5);
+    let sameTop = true; for (let i = 0; i < at97.L.length && sameTop; i++) sameTop = at97.L[i] === at100.L[i];
+    ok('stepped: m=0.97 and m=1.0 select the SAME (last) frame — floor(m*frames)', sameTop);
+    ok('stepped: a different morph selects a different frame', at50.L.some((v, i) => Math.abs(v - at100.L[i]) > 0.01));
+    // and the last frame is genuinely reachable below m=1 (the bug the mapping exists to prevent)
+    ok('stepped: the last frame is reachable before m=1', rms(at97.L) > 0.01 && sameTop);
   }
   // ANTI-ALIASING: the payoff test. A high note with mips vs the same render pinned to level 0.
   {
@@ -389,6 +415,18 @@ ok('live source declares a mip algo version', Number.isInteger(lib.WT_MIP_ALGO_V
     const eMip = band(withMips.L), eFlat = band(noMips.L);
     ok('mipmapping cuts high-band foldback energy substantially', eMip < eFlat * 0.5, `mips ${eMip.toExponential(2)} vs flat ${eFlat.toExponential(2)}`);
     ok('mipped render is still audible (did not just mute everything)', rms(withMips.L) > 0.01, rms(withMips.L).toFixed(4));
+  }
+  // epoch guard: a stale async resolution must not steal the selection
+  {
+    const c = mk('wavetable');
+    const bi = c.core.wtCache[c.core.WT_BUILTIN];
+    c.core.wtPut('t:old', bi); c.core.wtPut('t:new', bi);
+    const stale = c.wtBeginEpoch();          // an async load for 't:old' starts here
+    c.wtSelect('t:new');                     // ...a newer direct selection lands first (bumps the epoch)
+    const accepted = c.wtSelect('t:old', stale);
+    ok('stale epoch selection is rejected', accepted === false && c.core.wtHash === 't:new', c.core.wtHash);
+    const fresh = c.wtBeginEpoch();
+    ok('current epoch selection is accepted', c.wtSelect('t:old', fresh) === true && c.core.wtHash === 't:old');
   }
   // other generators are untouched by all of this
   {
