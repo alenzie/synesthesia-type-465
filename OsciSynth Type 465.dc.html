@@ -841,7 +841,7 @@ class SynthCore {
   }
 }
 class Component extends DCLogic {
-  state = { power:false, drone:true, gen:'lissajous', octBase:48, playing:false, loop:false, hueFollow:true, midiName:'', midiDur:0, perf:false, warm:false, tick:0, saving:false, texTab:'tex', presetOpen:false, bpm:120, scopeMode:'scope', eqTap:'post', eqFreeze:false, loopSel:-1, loopOn:false, loopLevel:0.8 };
+  state = { power:false, drone:true, gen:'lissajous', octBase:48, playing:false, loop:false, hueFollow:true, midiName:'', midiDur:0, perf:false, warm:false, tick:0, saving:false, texTab:'tex', presetOpen:false, bpm:138, scopeMode:'scope', eqTap:'post', eqFreeze:false, loopSel:-1, loopOn:false, loopLevel:0.8 };
   constructor(props){
     super(props);
     this.TAU = Math.PI*2;
@@ -1218,12 +1218,21 @@ class Component extends DCLogic {
     this._loopSrc=src; this._loopBpm=this.loopTempo(); this._loopErr='';
     this.setState({loopOn:true});
   }
-  loopPick(dir){
+  async loopPick(dir){
     const list=this.loopList(); if(!list.length)return;
-    const wasOn=this.state.loopOn; if(wasOn)this.loopStop();
     let i=this.state.loopSel+dir;
     if(i<-1)i=list.length-1; if(i>=list.length)i=-1;   // -1 = none
-    this.setState({loopSel:i});
+    const L=list[i]||null;
+    /* Switching loops parks the instrument in a clean stopped state (power + drone off) and adopts
+     * the loop's OWN tempo. That way PLAY gives an unstretched — so pitch-correct — loop with the
+     * synth already in time, instead of inheriting whatever tempo happened to be set. */
+    this.loopStop();
+    if(this.running)await this.power(false);
+    this.state.drone=false; this.core.drone=false;
+    this.state.loopSel=i;
+    const st={loopSel:i, drone:false, loopOn:false};
+    if(L){ this.state.bpm=L.bpm; st.bpm=L.bpm; }
+    this.setState(st);
   }
   async power(on){
     if(on){

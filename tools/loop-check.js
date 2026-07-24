@@ -16,6 +16,8 @@ const ok = (n, c, d='') => { if (!c) fail++; console.log((c?'PASS':'FAIL')+'  '+
 
     const list = await p.evaluate(() => (window.OSCI_LOOPS||[]).map(L => ({name:L.name,bpm:L.bpm,beats:L.beats,loopSeconds:L.loopSeconds})));
     ok('loop bundle loaded', list.length === 3, list.map(l=>l.bpm).join('/'));
+    const defBpm = await p.evaluate(() => window.__osci.state.bpm);
+    ok('default starting tempo is 138', defBpm === 138, String(defBpm));
     ok('all loops are 32 beats', list.every(l => l.beats === 32));
 
     // select loop 0 and play
@@ -80,6 +82,24 @@ const ok = (n, c, d='') => { if (!c) fail++; console.log((c?'PASS':'FAIL')+'  '+
     ok('PLAY kickstarts DRONE', r6.before === false && r6.after === true && r6.coreDrone === true);
     ok('the drone reaches the engine patch before the downbeat', r6.patched === true, 'patch drone=' + r6.patched);
     ok('STOP leaves the drone running (you keep hearing the instrument)', true);
+
+    // switching loops parks the instrument and adopts the loop's native tempo
+    const r7 = await p.evaluate(async () => {
+      const o = window.__osci;
+      o.setState({ loopSel: -1 }); o.state.loopSel = -1;
+      o.state.bpm = 100; o.setState({ bpm: 100 });   // deliberately NOT any loop's tempo
+      await o.power(true);
+      o.state.drone = true; o.setState({ drone: true });
+      const before = { running: o.running, drone: o.state.drone, bpm: o.state.bpm };
+      await o.loopPick(1);                       // -> first loop
+      const L = o.loopCur();
+      return { before, running: o.running, drone: o.state.drone, bpm: o.state.bpm,
+               loopBpm: L && L.bpm, rate: o.loopRate(), ctx: o.ctx.state };
+    });
+    ok('switching loops kills power', r7.before.running === true && r7.running === false, 'ctx=' + r7.ctx);
+    ok('switching loops kills drone', r7.before.drone === true && r7.drone === false);
+    ok('switching loops adopts the loop tempo', r7.bpm === r7.loopBpm, r7.before.bpm + ' -> ' + r7.bpm);
+    ok('so the loop would play at NATIVE rate (no pitch shift)', Math.abs(r7.rate - 1) < 1e-6, 'rate ' + r7.rate.toFixed(6));
 
     // the loop must NOT be in the instrument's signal path
     const r5 = await p.evaluate(() => {
