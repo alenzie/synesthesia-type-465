@@ -312,7 +312,7 @@ function parseWavetable(buf){
     if(buf.byteLength<12)throw new Error('.wt header truncated.');
     const frameSize=dvv.getUint32(4,true), hdrFrames=dvv.getUint16(8,true), flags=dvv.getUint16(10,true);
     if(flags&WTF_IS_SAMPLE)throw new Error('This .wt is flagged as a sample, not a wavetable.');
-    if(frameSize<2||frameSize>8192||(frameSize&(frameSize-1)))throw new Error('Invalid .wt cycle size '+frameSize+'.');
+    if(frameSize<8||frameSize>8192||(frameSize&(frameSize-1)))throw new Error('Invalid .wt cycle size '+frameSize+' (need a power of two, 8..8192).');
     if(hdrFrames<1)throw new Error('.wt declares zero frames.');
     const isInt=!!(flags&WTF_INT16), full=!!(flags&WTF_INT16_IS_16), bps=isInt?2:4;
     // CAP FIRST, then allocate: a hostile header must never size an allocation we do not keep.
@@ -432,8 +432,11 @@ function wtFFT(re,im,inverse){
   }
 }
 function wtMipLevelSizes(frameSize){
+  // The contract floors levels at 8 samples; a table below that is not representable, so refuse
+  // rather than silently emitting a below-contract level (the parser rejects these too).
+  if(!(frameSize>=8))throw new Error('Frame size '+frameSize+' is below the 8-sample wavetable floor.');
   const out=[]; for(let nk=frameSize; nk>=8; nk>>=1)out.push(nk);
-  return out.length?out:[frameSize];
+  return out;
 }
 function buildWavetableMips(table){
   const N=table.frameSize, frames=table.frames, sizes=wtMipLevelSizes(N);

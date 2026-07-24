@@ -14,9 +14,13 @@ function fn(name) {
   for (; i < html.length; i++) { if (html[i] === '{') d++; else if (html[i] === '}') { if (--d === 0) { end = i + 1; break; } } }
   return html.slice(start, end);
 }
-const lib = new Function('var WT_MIP_ALGO_VERSION=1; var _wtTwiddle={};\n' + fn('wtSha256') + '\n' + fn('wtHashTable') + '\n' + fn('parseWavetable')
+// Read the version constant from the LIVE source — a synthetic value would make the version check vacuous.
+const verM = /var\s+WT_MIP_ALGO_VERSION\s*=\s*(\d+)\s*;/.exec(html);
+if (!verM) throw new Error('WT_MIP_ALGO_VERSION not found in the live source');
+const lib = new Function('var WT_MIP_ALGO_VERSION=' + verM[1] + '; var _wtTwiddle={};\n' + fn('wtSha256') + '\n' + fn('wtHashTable') + '\n' + fn('parseWavetable')
   + '\n' + fn('wtTwiddles') + '\n' + fn('wtFFT') + '\n' + fn('wtMipLevelSizes') + '\n' + fn('buildWavetableMips')
-  + '\nreturn {wtSha256, wtHashTable, parseWavetable, wtFFT, wtMipLevelSizes, buildWavetableMips, WT_MIP_ALGO_VERSION};')();
+  + '\n' + fn('wtWorkerSource') + '\n' + fn('buildWavetableMipsAsync')
+  + '\nreturn {wtSha256, wtHashTable, parseWavetable, wtFFT, wtMipLevelSizes, buildWavetableMips, wtWorkerSource, buildWavetableMipsAsync, WT_MIP_ALGO_VERSION};')();
 const F = (name) => { const b = fs.readFileSync(path.join(__dirname, 'fixtures', name)); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
 
 let fail = 0;
@@ -270,5 +274,41 @@ const F32TOL = 1e-6;
   ok('512-frame level 0 is DC-free', dftMag(Float64Array.from(m.levels[0].L.subarray(0, 512)))[0] < F32TOL);
 }
 
-console.log(fail === 0 ? '\nWAVETABLE C1+C2: ALL CHECKS GREEN' : '\n' + fail + ' CHECKS FAILED');
-process.exit(fail ? 1 : 0);
+// 8. the 8-sample floor is enforced at both ends
+throws('wtMipLevelSizes refuses sub-8 frame sizes', () => lib.wtMipLevelSizes(4), /below the 8-sample/);
+ok('live source declares a mip algo version', Number.isInteger(lib.WT_MIP_ALGO_VERSION) && lib.WT_MIP_ALGO_VERSION >= 1, String(lib.WT_MIP_ALGO_VERSION));
+
+// 9. the WORKER SOURCE actually works — it is assembled by string concatenation of .toString(),
+// exactly the construct that breaks silently. Evaluate it in a fake worker scope and require the
+// result to equal the direct build byte-for-byte.
+{
+  const t = lib.parseWavetable(F('clm-4x2048-int16.wav'));
+  const src = lib.wtWorkerSource();
+  const scope = { self: null, postMessage: null };
+  scope.self = { onmessage: null, postMessage: (msg) => { scope.result = msg; } };
+  new Function('self', src)(scope.self);
+  ok('worker source registers an onmessage handler', typeof scope.self.onmessage === 'function');
+  scope.self.onmessage({ data: { frameSize: t.frameSize, frames: t.frames, channels: t.channels, dataL: t.dataL, dataR: t.dataR } });
+  ok('worker source returns ok:true with mips', !!(scope.result && scope.result.ok && scope.result.mips));
+  const direct = lib.buildWavetableMips(t), viaWorker = scope.result.mips;
+  ok('worker mips report the live algo version', viaWorker.mipAlgoVersion === lib.WT_MIP_ALGO_VERSION);
+  let same = viaWorker.levels.length === direct.levels.length;
+  for (let i = 0; i < direct.levels.length && same; i++) same = direct.levels[i].L.every((v, j) => v === viaWorker.levels[i].L[j]);
+  ok('worker-built mips are byte-identical to the direct build', same);
+  // and a throwing payload must report ok:false rather than escaping
+  scope.result = null;
+  scope.self.onmessage({ data: { frameSize: 4, frames: 1, channels: 1, dataL: new Float32Array(4), dataR: null } });
+  ok('worker reports errors as ok:false (does not throw out of the handler)', !!(scope.result && scope.result.ok === false && /8-sample/.test(scope.result.error)), scope.result && scope.result.error);
+}
+
+// 10. async builder falls back to a main-thread build when no Worker exists (the file:// safety net)
+(async () => {
+  const t = lib.parseWavetable(F('surge-4x512-int16.wt'));
+  const m = await lib.buildWavetableMipsAsync(t);   // node has no Worker global -> fallback path
+  const direct = lib.buildWavetableMips(t);
+  ok('buildWavetableMipsAsync falls back without a Worker', !!m && m.levels.length === direct.levels.length);
+  ok('fallback build matches the direct build byte-for-byte', !!m && m.levels.every((lv, i) => lv.L.every((v, j) => v === direct.levels[i].L[j])));
+
+  console.log(fail === 0 ? '\nWAVETABLE C1+C2: ALL CHECKS GREEN' : '\n' + fail + ' CHECKS FAILED');
+  process.exit(fail ? 1 : 0);
+})();
