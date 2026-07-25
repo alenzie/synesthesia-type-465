@@ -163,11 +163,29 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
       <sc-if value="{{wtOn}}" hint-placeholder-val="{{ true }}">
         <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;flex:0 0 auto">
           <canvas ref="{{wtStripRef}}" title="Current frame · MORPH playhead" style="width:210px;height:46px;border:1px solid #8f8a77;border-radius:5px;background:#0d1410"></canvas>
-          <div style="display:flex;flex-direction:column;gap:5px">
+          <div style="display:flex;flex-direction:column;gap:5px;position:relative">
+            <div onClick="{{wtLibToggle}}" title="Browse your imported wavetable library" style="{{wtLibBtnStyle}}">LIBRARY {{wtLibCount}}</div>
             <div onClick="{{wtImportClick}}" title="Load a Serum/Vital .wav or Surge .wt wavetable" style="{{wtBtnStyle}}">{{wtBtnLabel}}</div>
+            <div onClick="{{wtBulkImportClick}}" title="Bulk-import a whole folder of wavetables at once (Serum/Vital .wav or Surge .wt)" style="{{wtBtnStyle}}">IMPORT FOLDER</div>
             <div onPointerDown="{{wtTrimDown}}" title="Table trim (drag)" style="{{wtTrimStyle}}">TRIM {{wtTrimText}}</div>
+            <sc-if value="{{wtLibOpen}}" hint-placeholder-val="{{ true }}">
+              <div onClick="{{wtLibClose}}" style="position:fixed;inset:0;z-index:40"></div>
+              <div style="position:absolute;top:0;left:100%;margin-left:8px;z-index:41;width:280px;max-height:380px;overflow:auto;background:#1c1a14;border:1px solid #8f8a77;border-radius:6px;box-shadow:0 10px 28px rgba(0,0,0,.55);padding:4px">
+                <input value="{{wtLibFilterVal}}" onInput="{{wtLibFilterChange}}" placeholder="filter…" style="width:100%;box-sizing:border-box;margin-bottom:4px;padding:5px 8px;border-radius:4px;border:1px solid #8f8a77;background:#17160f;color:#ffb454;font:500 8px 'IBM Plex Mono',monospace;outline:none">
+                <sc-if value="{{wtLibEmpty}}" hint-placeholder-val="{{ true }}">
+                  <div style="padding:8px 9px;font:500 8px 'IBM Plex Mono',monospace;color:#8a8574">no tables yet — LOAD TABLE or IMPORT FOLDER</div>
+                </sc-if>
+                <sc-for list="{{wtLibMenu}}" as="grp" hint-placeholder-count="8">
+                  <div style="font:700 7px 'IBM Plex Mono',monospace;letter-spacing:.18em;color:#c89a4a;padding:7px 9px 3px;position:sticky;top:0;background:#1c1a14;border-bottom:1px solid rgba(200,154,74,.2)">{{grp.cat}}</div>
+                  <sc-for list="{{grp.items}}" as="it" hint-placeholder-count="8">
+                    <div onClick="{{it.pick}}" style="{{it.style}}">{{it.name}}</div>
+                  </sc-for>
+                </sc-for>
+              </div>
+            </sc-if>
           </div>
           <input type="file" ref="{{wtFileRef}}" accept=".wav,.wt,audio/wav,audio/x-wav" style="display:none" onChange="{{wtFileChange}}">
+          <input type="file" ref="{{wtBulkFileRef}}" webkitdirectory multiple accept=".wav,.wt,audio/wav,audio/x-wav" style="display:none" onChange="{{wtBulkFileChange}}">
         </div>
       </sc-if>
       <div style="flex:0 0 118px;background:linear-gradient(180deg,#f6f1e0,#e9e3cf);border:1px solid #8f8a77;border-radius:6px;position:relative;height:62px;overflow:hidden;box-shadow:inset 0 1px 3px rgba(0,0,0,.25)" title="Output VU (relocated)">
@@ -180,6 +198,15 @@ a{color:#8a5a1e}a:hover{color:#b97c2e}
         <div style="position:absolute;bottom:3px;right:6px;font:600 6px 'IBM Plex Mono',monospace;letter-spacing:.2em;color:#6b6656">VU · OUT</div>
       </div>
     </div>
+
+    <sc-if value="{{wtBulkOn}}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#8a5a1e">
+        <span>{{wtBulkStatus}}</span>
+        <sc-if value="{{wtBulkRunning}}" hint-placeholder-val="{{ true }}">
+          <div onClick="{{wtBulkStopClick}}" style="{{wtBtnStyle}}">STOP</div>
+        </sc-if>
+      </div>
+    </sc-if>
 
     <sc-if value="{{wtOn}}" hint-placeholder-val="{{ true }}">
       <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;font:500 8px 'IBM Plex Mono',monospace;letter-spacing:.06em;color:{{wtStatusColor}}">
@@ -877,7 +904,7 @@ class SynthCore {
   }
 }
 class Component extends DCLogic {
-  state = { power:false, drone:true, gen:'lissajous', octBase:48, playing:false, loop:false, hueFollow:true, midiName:'', midiDur:0, perf:false, warm:false, tick:0, saving:false, texTab:'tex', presetOpen:false, bpm:138, scopeMode:'scope', eqTap:'post', eqFreeze:false, loopSel:-1, loopOn:false, loopLevel:0.8 };
+  state = { power:false, drone:true, gen:'lissajous', octBase:48, playing:false, loop:false, hueFollow:true, midiName:'', midiDur:0, perf:false, warm:false, tick:0, saving:false, texTab:'tex', presetOpen:false, bpm:138, scopeMode:'scope', eqTap:'post', eqFreeze:false, loopSel:-1, loopOn:false, loopLevel:0.8, wtLibOpen:false, wtLibFilter:'' };
   constructor(props){
     super(props);
     this.TAU = Math.PI*2;
@@ -957,6 +984,7 @@ class Component extends DCLogic {
     this.MAXV=11;
     this.core=new SynthCore(); // the whole audio engine (Phase 1) — UI talks to it, never renders
     this._wtEpoch=0; // bumped by every preset load / import / table select; stale resolutions are dropped
+    this._wtCatalog=[]; this._wtBulk=null; this._wtBulkDone=null; this._wtBulkToken=0; // library browser (C7)
     this.core.P=this.P; this.core.FM_DIVS=this.FM_DIVS; this.core.eqBands=this.eqBands;
     this.voices=this.core.voices; // shared reference (same-thread host); worklet host reads telemetry instead
     this.ctx=null; this.node=null; this.running=false;
@@ -969,7 +997,7 @@ class Component extends DCLogic {
       ['radial-gradient(circle at 40% 35%,#ffc4b2,#e03a20)','0 0 6px rgba(235,85,55,.8)'],
     ];
     this._refs={};
-    ['beamRef','fpsRef','needleRef','fileRef','seekThumbRef','timeRef','dotsRef','presetFileRef','presetNameInputRef','presetNameRef','outPeakBarRef','outRmsBarRef','grSelRef','wtFileRef','wtStripRef'].forEach(n=>{ this[n]=el=>{this._refs[n]=el; if(n==='beamRef'&&el)this.sizeBeam();}; });
+    ['beamRef','fpsRef','needleRef','fileRef','seekThumbRef','timeRef','dotsRef','presetFileRef','presetNameInputRef','presetNameRef','outPeakBarRef','outRmsBarRef','grSelRef','wtFileRef','wtStripRef','wtBulkFileRef'].forEach(n=>{ this[n]=el=>{this._refs[n]=el; if(n==='beamRef'&&el)this.sizeBeam();}; });
     if(typeof window!=='undefined')window.__osci=this; // debug/automation handle (Playwright browser pass)
   }
   mtof(n){return 440*Math.pow(2,(n-69)/12);}
@@ -1226,33 +1254,56 @@ class Component extends DCLogic {
    * this app is opened from file://, where IndexedDB is spec-legal but browser-quirky, the store is
    * PROBED at first use (open -> write -> read -> delete a sentinel). Any failure — quota, private
    * mode, engine refusal — flips to a REAL in-memory map with the same interface for the session. */
+  /* v2 (C7 library browser): a SECOND lightweight 'catalog' store \u2014 {hash,name,frames,frameSize,
+   * channels,category} only, no sample data \u2014 alongside the existing heavy 'tables' store. list()
+   * reads ONLY 'catalog', so browsing a library of hundreds of tables never deserializes hundreds of
+   * MB of Float32 sample data just to show names. Every put() writes both stores in one transaction
+   * so they can't drift. v1->v2 upgrade backfills 'catalog' from any tables a prior session already
+   * stored, so upgrading an existing library never "loses" a table from the browser. */
   async wtStore(){
     if(this._wtStorePromise)return this._wtStorePromise;
     this._wtStorePromise=(async()=>{
       const mem={mode:'memory',map:{},
         put:async(r)=>{ mem.map[r.hash]=r; }, get:async(h)=>mem.map[h]||null,
-        list:async()=>Object.values(mem.map).map(r=>({hash:r.hash,name:r.name,frames:r.frames,frameSize:r.frameSize,channels:r.channels}))};
+        list:async()=>Object.values(mem.map).map(r=>({hash:r.hash,name:r.name,frames:r.frames,frameSize:r.frameSize,channels:r.channels,category:r.category||''}))};
       try{
         if(typeof indexedDB==='undefined')throw new Error('no indexedDB');
         const db=await new Promise((res,rej)=>{
-          const rq=indexedDB.open('oscisynth-wavetables',1);
-          rq.onupgradeneeded=()=>{ if(!rq.result.objectStoreNames.contains('tables'))rq.result.createObjectStore('tables',{keyPath:'hash'}); };
+          const rq=indexedDB.open('oscisynth-wavetables',2);
+          rq.onupgradeneeded=(ev)=>{
+            const d=rq.result;
+            if(!d.objectStoreNames.contains('tables'))d.createObjectStore('tables',{keyPath:'hash'});
+            if(!d.objectStoreNames.contains('catalog'))d.createObjectStore('catalog',{keyPath:'hash'});
+            if(ev.oldVersion<2){
+              const tblStore=rq.transaction.objectStore('tables'), catStore=rq.transaction.objectStore('catalog');
+              tblStore.openCursor().onsuccess=(e)=>{ const cur=e.target.result; if(!cur)return;
+                const r=cur.value;
+                catStore.put({hash:r.hash,name:r.name,frames:r.frames,frameSize:r.frameSize,channels:r.channels,category:r.category||''});
+                cur.continue(); };
+            }
+          };
           rq.onsuccess=()=>res(rq.result); rq.onerror=()=>rej(rq.error||new Error('open failed'));
           rq.onblocked=()=>rej(new Error('blocked'));
           setTimeout(()=>rej(new Error('timeout')),4000);
         });
         db.onversionchange=()=>{ try{ db.close(); }catch(e){} this._wtStorePromise=null; };
-        const tx=(mode)=>db.transaction('tables',mode).objectStore('tables');
         const call=(req)=>new Promise((res,rej)=>{ req.onsuccess=()=>res(req.result); req.onerror=()=>rej(req.error); });
+        const bothTx=(mode)=>db.transaction(['tables','catalog'],mode);
         const idb={mode:'indexeddb',
-          put:(r)=>call(tx('readwrite').put(r)), get:(h)=>call(tx('readonly').get(h)).then(v=>v||null),
-          list:()=>call(tx('readonly').getAll()).then(a=>a.map(r=>({hash:r.hash,name:r.name,frames:r.frames,frameSize:r.frameSize,channels:r.channels})))};
+          get:(h)=>call(db.transaction('tables','readonly').objectStore('tables').get(h)).then(v=>v||null),
+          put:(r)=>{ const tx=bothTx('readwrite');
+            tx.objectStore('tables').put(r);
+            tx.objectStore('catalog').put({hash:r.hash,name:r.name,frames:r.frames,frameSize:r.frameSize,channels:r.channels,category:r.category||''});
+            return new Promise((res,rej)=>{ tx.oncomplete=()=>res(true); tx.onerror=()=>rej(tx.error); }); },
+          list:()=>call(db.transaction('catalog','readonly').objectStore('catalog').getAll())};
         // PROBE: a real round-trip, because merely opening proves nothing on file://
         const probe={hash:'__probe__',name:'probe',frames:1,frameSize:8,channels:1,samples:new Float32Array(8)};
         await idb.put(probe);
         const back=await idb.get('__probe__');
         if(!back||!back.samples||back.samples.length!==8)throw new Error('probe round-trip failed');
-        await call(tx('readwrite').delete('__probe__'));
+        const cleanupTx=bothTx('readwrite');
+        cleanupTx.objectStore('tables').delete('__probe__'); cleanupTx.objectStore('catalog').delete('__probe__');
+        await new Promise((res,rej)=>{ cleanupTx.oncomplete=()=>res(); cleanupTx.onerror=()=>rej(cleanupTx.error); });
         return idb;
       }catch(e){
         this._wtStoreNote='table storage unavailable here \u2014 this session only ('+(e&&e.message||e)+')';
@@ -1261,10 +1312,12 @@ class Component extends DCLogic {
     })();
     return this._wtStorePromise;
   }
-  async wtSave(hash,table){
+  async wtSave(hash,table,name,category){
+    // name/category are passed explicitly by the caller (not read off this._wtInfo, which is only
+    // updated AFTER this runs — reading it here persisted the PREVIOUS table's name under a new hash).
     try{ const st=await this.wtStore();
-      await st.put({hash,name:this._wtInfo?this._wtInfo.name:'table',frames:table.frames,frameSize:table.frameSize,
-        channels:table.channels,interp:table.meta.interp,mipAlgoVersion:WT_MIP_ALGO_VERSION,
+      await st.put({hash,name:name||(this._wtInfo?this._wtInfo.name:'table'),frames:table.frames,frameSize:table.frameSize,
+        channels:table.channels,interp:table.meta.interp,mipAlgoVersion:WT_MIP_ALGO_VERSION,category:category||'',
         samplesL:table.dataL,samplesR:table.dataR||null});
       return true;
     }catch(e){ return false; }
@@ -1328,13 +1381,15 @@ class Component extends DCLogic {
       if(!mips)throw new Error('mip build failed');
       mips.interp=t.meta.interp;
       const hash=wtHashTable(t);
+      const dispName=file.name.replace(/\.[^.]+$/,'');
       this.core.wtPut(hash,mips);                                     // cache fill: always allowed
-      const saved=await this.wtSave(hash,t);                          // persist BEFORE reporting success
+      const saved=await this.wtSave(hash,t,dispName,'');              // persist BEFORE reporting success
       this._wtNoPersist=!saved;                                       // surfaced in the status line
+      if(saved)this._wtCatalog=(this._wtCatalog||[]).filter(r=>r.hash!==hash).concat([{hash,name:dispName,frames:t.frames,frameSize:t.frameSize,channels:t.channels,category:''}]);
       if(stale()){ this._wtBusy=false; this._wtNote=''; this.setState({}); return; }
       // only now that this import has WON may it touch the visible state
       this._wtPending=pending;
-      this._wtInfo={name:file.name.replace(/\.[^.]+$/,''),frames:t.frames,frameSize:t.frameSize,
+      this._wtInfo={name:dispName,frames:t.frames,frameSize:t.frameSize,
         channels:t.channels,source:t.meta.source,truncated:t.meta.truncated.slice(),hash};
       this._wtNote=''; this._wtBusy=false;
       if(!this.wtSelect(hash,epoch)){ this.setState({}); return; }
@@ -1347,6 +1402,64 @@ class Component extends DCLogic {
     }
   }
   wtPickFrameSize(fs){ const p=this._wtPending; if(!p)return; this._wtPending=null; this.wtImportFile({name:p.name},fs,p.buf); }
+  /* --- C7: wavetable LIBRARY browser ------------------------------------------------------------
+   * Bulk import is a SEPARATE, cheaper path from wtImportFile: it never builds the mip pyramid (real
+   * FFT work per level) or touches the live selection/generator — it only parses, hashes, dedupes,
+   * and persists raw samples for hundreds of files. Mips are built lazily, exactly once, the moment a
+   * table is actually picked from the library — via wtResolve, unchanged, same as a preset reference. */
+  async _wtRefreshCatalog(){
+    try{ const st=await this.wtStore(); this._wtCatalog=await st.list(); }catch(e){}
+    this.setState({});
+  }
+  wtBulkImportClick(){ if(this._refs.wtBulkFileRef)this._refs.wtBulkFileRef.click(); }
+  async wtBulkImportFiles(fileList){
+    const files=Array.from(fileList||[]).filter(f=>/\.(wav|wt)$/i.test(f.name));
+    if(!files.length)return;
+    const token=(this._wtBulkToken=(this._wtBulkToken||0)+1);
+    const known=new Set((this._wtCatalog||[]).map(r=>r.hash));   // in-memory dedup check — no IndexedDB round-trip per file
+    this._wtBulkDone=null;
+    this._wtBulk={done:0,total:files.length,skipped:0,errors:[],ambiguous:[]};
+    this.setState({});
+    // stopped=true when cancelled mid-run (STOP, or a newer bulk import superseding this one) — either
+    // way _wtBulk must be CLEARED here, not left frozen at partial progress (else the status line and
+    // the STOP button would keep showing a run that already ended).
+    const finish=(stopped)=>{
+      const b=this._wtBulk;
+      // imported is derived from b.done (files actually reached so far), NOT b.total — on a stopped
+      // run those differ, and total-skipped-errors would silently count never-attempted files as imported.
+      this._wtBulkDone={total:b.total,imported:b.done-b.skipped-b.errors.length,skipped:b.skipped,errors:b.errors.length,stopped,processed:b.done};
+      this._wtBulk=null; this.setState({});
+    };
+    for(const file of files){
+      if(this._wtBulkToken!==token)return finish(true);
+      try{
+        const buf=await file.arrayBuffer();
+        const t=parseWavetable(buf);
+        const hash=wtHashTable(t);
+        if(!known.has(hash)){
+          const parts=(file.webkitRelativePath||'').split('/').filter(Boolean);
+          const category=parts.length>2?parts.slice(1,-1).join(' / '):(parts.length===2?parts[0]:'Wavetables');
+          const name=file.name.replace(/\.[^.]+$/,'');
+          const ok=await this.wtSave(hash,t,name,category);
+          if(ok){ known.add(hash); this._wtCatalog=(this._wtCatalog||[]).concat([{hash,name,frames:t.frames,frameSize:t.frameSize,channels:t.channels,category}]); }
+          else this._wtBulk.errors.push({name:file.name,message:'could not persist (storage unavailable)'});
+        } else this._wtBulk.skipped++;
+        if(t.meta.ambiguous)this._wtBulk.ambiguous.push(file.name);
+      }catch(err){ this._wtBulk.errors.push({name:file.name,message:String(err&&err.message||err)}); }
+      this._wtBulk.done++;
+      if(this._wtBulk.done%5===0||this._wtBulk.done===files.length)this.setState({});
+      await new Promise(r=>setTimeout(r,0));                      // yield: keep the tab responsive, let STOP land
+    }
+    if(this._wtBulkToken!==token)return finish(true);
+    try{ const st=await this.wtStore(); this._wtCatalog=await st.list(); }catch(e){}  // reconcile with true DB state
+    finish(false);
+  }
+  wtBulkStop(){ this._wtBulkToken=(this._wtBulkToken||0)+1; }
+  wtPickFromLibrary(hash,name){
+    this.wtResolve({hash,name},this.wtBeginEpoch());
+    const patch=(this.state.gen!=='wavetable')?{gen:'wavetable',wtLibOpen:false}:{wtLibOpen:false};
+    this.setState(patch);
+  }
   _drawWtStrip(){
     const cv=this._refs.wtStripRef; if(!cv||this.state.gen!=='wavetable')return;
     const DPR=Math.min(2,window.devicePixelRatio||1);
@@ -2118,6 +2231,7 @@ class Component extends DCLogic {
     window.addEventListener('pointerup',this._pu);
     window.addEventListener('pointercancel',this._pu);
     this._tryFetchBanks();
+    this._wtRefreshCatalog();
   }
   componentWillUnmount(){
     cancelAnimationFrame(this._raf);
@@ -2209,6 +2323,22 @@ class Component extends DCLogic {
     const presetBtn={padding:'5px 10px',borderRadius:'4px',cursor:'pointer',font:"600 8px 'IBM Plex Mono',monospace",letterSpacing:'.1em',color:'#3b382f',background:'linear-gradient(180deg,#efe9d8,#cfc9b6)',border:'1px solid #8f8a77',boxShadow:'0 2px 3px rgba(0,0,0,.3)',userSelect:'none'};
     const navBtn=Object.assign({},presetBtn,{padding:'5px 9px'});
     const tagBtn=Object.assign({},presetBtn,{background:'#17160f',color:'#ffb454',boxShadow:'inset 0 1px 3px #000'});
+    // --- wavetable LIBRARY dropdown (C7): mirrors the preset dropdown above 1:1 — same _itemStyle,
+    // same presetBtn/navBtn, same overlay-panel structure — just grouped/sorted from this._wtCatalog
+    // (the lightweight IndexedDB 'catalog' store) instead of a preset bank. Sorted (not insertion-
+    // order like presetMenu) because this list runs into the hundreds, where alphabetical browsing
+    // and a text filter matter far more than they do for a few dozen presets.
+    const _wtFilter=(s.wtLibFilter||'').trim().toLowerCase();
+    const _wtCat=this._wtCatalog||[];
+    const _wtGroups={},_wtOrder=[];
+    _wtCat.filter(r=>!_wtFilter||r.name.toLowerCase().includes(_wtFilter)||(r.category||'').toLowerCase().includes(_wtFilter))
+      .forEach(r=>{ const c=r.category||'Wavetables'; if(!_wtGroups[c]){_wtGroups[c]=[];_wtOrder.push(c);} _wtGroups[c].push(r); });
+    _wtOrder.sort((a,b)=>a.localeCompare(b));
+    const wtLibMenu=_wtOrder.map(c=>({cat:c, items:_wtGroups[c].slice().sort((a,b)=>a.name.localeCompare(b.name)).map(r=>({
+      name:r.name+' · '+r.frames+'×'+r.frameSize+(r.channels===2?' st':''),
+      style:_itemStyle(r.hash===this.core.wtHash),
+      pick:()=>this.wtPickFromLibrary(r.hash,r.name),
+    }))}));
     // --- EQ control panel view-model (shown in analyzer mode) ---
     const eqAnalyzerOn=s.scopeMode==='analyzer';
     const eqSelBand=this.eqBands[this.eqSel]||null;
@@ -2357,6 +2487,32 @@ class Component extends DCLogic {
         const up=()=>{ this.pushUndoIfChanged(before); el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); el.removeEventListener('lostpointercapture',up); };
         el.addEventListener('pointermove',move); el.addEventListener('pointerup',up); el.addEventListener('lostpointercapture',up);
       },
+      wtLibOpen:!!s.wtLibOpen,
+      wtLibToggle:()=>{ this._wtBulkDone=null; this.setState({wtLibOpen:!s.wtLibOpen}); },
+      wtLibClose:()=>this.setState({wtLibOpen:false}),
+      wtLibCount:_wtCat.length?('('+_wtCat.length+')'):'',
+      wtLibBtnStyle:Object.assign({},presetBtn,{padding:'5px 9px'},s.wtLibOpen?{background:'linear-gradient(180deg,#cfae7a,#b98f4a)',color:'#2a2013'}:{}),
+      wtLibFilterVal:s.wtLibFilter||'',
+      wtLibFilterChange:e=>this.setState({wtLibFilter:e.target.value}),
+      wtLibMenu, wtLibEmpty:_wtCat.length===0,
+      wtBulkImportClick:()=>this.wtBulkImportClick(),
+      wtBulkFileRef:this.wtBulkFileRef,
+      // e.target.files is a LIVE FileList bound to the input — clearing e.target.value below empties
+      // it immediately, so it must be copied into a plain array (Array.from) BEFORE the clear, not
+      // just re-referenced (the single-file wtFileChange above dodges this by dereferencing files[0]
+      // — an independent File object — before clearing; a FileList wrapper has no such protection).
+      wtBulkFileChange:e=>{ const files=Array.from(e.target.files||[]); e.target.value=''; this.wtBulkImportFiles(files); },
+      wtBulkOn:!!(this._wtBulk||this._wtBulkDone),
+      wtBulkRunning:!!this._wtBulk,
+      wtBulkStopClick:()=>this.wtBulkStop(),
+      wtBulkStatus:this._wtBulk
+        ? ('importing '+this._wtBulk.done+'/'+this._wtBulk.total
+           +(this._wtBulk.skipped?(' · '+this._wtBulk.skipped+' duplicate'+(this._wtBulk.skipped===1?'':'s')+' skipped'):'')
+           +(this._wtBulk.errors.length?(' · '+this._wtBulk.errors.length+' error'+(this._wtBulk.errors.length===1?'':'s')):''))
+        : (this._wtBulkDone
+           ? ((this._wtBulkDone.stopped?('stopped at '+this._wtBulkDone.processed+'/'+this._wtBulkDone.total+' — '):'imported ')+this._wtBulkDone.imported+' · '+this._wtBulkDone.skipped+' duplicate'+(this._wtBulkDone.skipped===1?'':'s')+' skipped'
+              +(this._wtBulkDone.errors?(' · '+this._wtBulkDone.errors+' error'+(this._wtBulkDone.errors===1?'':'s')):''))
+           : ''),
       wtStatusColor:(this._wtErr||this._wtMissing)?'#c8452e':(this._wtPending?'#8a5a1e':'#6d6858'),
       wtStatus:(()=>{
         if(this._wtErr)return '\u26a0 '+this._wtErr;
