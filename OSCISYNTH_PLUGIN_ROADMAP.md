@@ -41,9 +41,10 @@ Un-interviewed details use a stated **default** you can override.
 
 ## 1. Architecture at a glance
 
-**Now (browser):** `OsciSynth Type 465.dc.html` — a `DCLogic` class runs an FM/oscilloscope synth on a
-**deprecated `ScriptProcessorNode`** (main thread). Params live in a plain `this.P` object mutated directly by
-knob handlers. No store, no undo, no presets. Output L/R **is** the oscilloscope X/Y beam.
+**Now (browser):** `OsciSynth Type 465.dc.html` — the audio engine is **`SynthCore`**, a self-contained
+class rendering inside an **AudioWorklet** (128-frame quanta; ScriptProcessor fallback drives the same core
+when worklets are unavailable). The UI `Component` talks to it via an ordered patch/note protocol and reads
+telemetry mirrored into a local core instance. Output L/R **is** the oscilloscope X/Y beam.
 
 **Target (browser, refactored):**
 ```
@@ -65,33 +66,35 @@ figure. That's why decision #3 is a toggle, and why the beam tap point is switch
 ## 2. Phased checklist
 
 ### Phase 0 — Parameter store + undo/redo + presets  *(foundation; everything rides on it)*
-- [ ] Upgrade `this.CTLS` tuples into a **ParameterModel**: `{id, label, section, min, max, step, default, skew, unit, format, toNorm, fromNorm, isDiscrete, choices}`.
+- [x] Upgrade `this.CTLS` tuples into a **ParameterModel** *(done 2026-07-23: `_pdesc(id)` — one descriptor per param with real-unit range, step, skew (`log` / `pow` for zero-inclusive frequency / `lin` / discrete), unit, format, choices)*: `{id, label, section, min, max, step, default, skew, unit, format, toNorm, fromNorm, isDiscrete, choices}`.
 - [ ] Build a **ParamStore** whose live values object *is* `this.P` (so `process()` + `renderVals()` keep reading it unchanged): `setValue(id, real, {gesture, source})`, `getNormalized/setNormalized`, `beginGesture(ids)/endGesture()`, `snapshot()/applySnapshot()`.
 - [ ] Route **every** write through it: `dialDown`, `masterDown`, `mutate()`, generator select, and the future EQ handle drags + wheel-Q. No direct `this.P[id]=` left.
 - [ ] **75-step FIFO undo ring**: one command `{before, after, label}` pushed per gesture on `endGesture`. `mutate()` / preset load / Full Reset each bracket all touched ids as **one** step. Add Undo/Redo buttons (the `↩ ↪` in the mockup).
 - [ ] Model `master` and `gen` (generator, discrete) as first-class params; keep transport/session state (power, playing, octBase, loop, MIDI, hueFollow) **out** of presets.
-- [ ] **Presets**: JSON `{name, version, schemaVersion, params:{id:value}, meta}`. localStorage catalog + `.json` import/export. Versioning + default-fill (missing id → descriptor default) so future params don't break old presets.
-- [ ] **Preset browser** (mockup top bar): dropdown, A/B compare, prev/next arrows, "Full Reset" default, dirty asterisk (`currentSnapshot != loadedSnapshot`).
-- [ ] Real-units canonical values + per-param `toNorm/fromNorm` skew (frequency = log) — this is what host automation consumes later.
+- [x] **Presets**: JSON `{name, v, schemaVersion, params, gen, eq{mix,outDb,tap,bands}}`. localStorage catalog + `.json` import **and export** (EXPORT = current patch, EXPORT BANK = all user presets). Versioning + default-fill. Versioning + default-fill (missing id → descriptor default) so future params don't break old presets.
+- [x] **Preset browser**: dropdown, **A/B compare** (two full snapshot slots, swap = one undo step, COPY A→B), prev/next arrows, "Full Reset" default, dirty asterisk. *(A/B done 2026-07-23)*
+- [x] **Precision discipline (2026-07-23):** `step` is a UI drag/nudge granularity hint ONLY — it never quantizes a value. Continuous params (all frequencies, filter cutoff, EQ times/gains) keep full double precision from the knob through the patch hop to the phase accumulators; only genuinely enumerated params (mode index, division index, trace sample count) snap. Rounding happens at the DISPLAY layer. BPM accepts 3 decimals (`step="any"`), so tempo-sync targets like 134.685 BPM are exact — SYNC mode derives Hz from BPM in double precision at audio rate rather than storing a rounded Hz. Guarded by `tools/precision-check.js`.
+- [x] Real-units canonical values + per-param `toNorm/fromNorm` skew (frequency = log; `pow` where the range includes 0) — knob drags now run THROUGH this mapping, so the browser feel is the automation curve the plugin will register. Verified by `tools/param-model-check.js`.
 
 ### Phase 1 — Retire ScriptProcessorNode → AudioWorklet  *(prereq for dynamic EQ + the C++ port)*
-- [ ] Move `process()` + `shape()` into an `AudioWorkletProcessor` (audio-render thread, 128-frame quantum). No allocation in `process`; pre-allocate all typed arrays.
-- [ ] Beam samples (`ringX/ringY`) → UI via a **SharedArrayBuffer lock-free ring** (padenot/ringbuf.js pattern). *(Needs COOP/COEP cross-origin-isolation headers — verify the host can send them; this is the one hosting gotcha.)*
-- [ ] Forces the audio-thread / UI-thread split you need anyway for iPlug2 — de-risks the port in familiar JS.
+- [x] Move the engine into an `AudioWorkletProcessor` *(done 2026-07-23: the whole engine is `SynthCore` — one pure, allocation-light class with injected RNG and absolute-counter cadences (2048 detector window / 128 easing, host-block independent); serialized into a blob worklet module at runtime; verified BIT-IDENTICAL to the pre-refactor engine via 4-scenario golden renders and to the SPN path via a headless protocol harness)*.
+- [x] Beam samples → UI *(done via 256-sample transferable ping-pong pool + telemetry mailbox written into the local core mirror — works from `file://` with no COOP/COEP; drop-not-block backpressure. SharedArrayBuffer ring remains a hosted-deploy upgrade path when `crossOriginIsolated`)*.
+- [x] Audio-thread / UI-thread split forced *(ordered patch/note protocol with params-before-note flush, stable band-id merge; ScriptProcessor kept as an automatic fallback driving the SAME SynthCore — one core, two hosts)*.
+- [x] Browser pass — AUTOMATED via Playwright (`tools/browser-pass.js`, 13 checks, headless **Chromium + Firefox both ALL-GREEN** from `file://`): worklet engages (the W0 spike found Chromium rejects blob: worklet modules on file:// — fixed with a data:-URL module), audio/beam/telemetry flow, note round-trip, EQ+undo, FAUST download, forced-SPN fallback + worklet restore, clean power-off, zero page errors. Remaining for the owner: an EARS pass (sound quality / glitch feel under real interaction). Detail: `PHASE1_WORKLET_PLAN.md`.
 
 ### Phase 2 — EQ + spectrograph  *(the big feature)*
-- [ ] **Portable biquad module** (framework-agnostic pure math): `computeCoeffs(type, freq, Q, gainDb, Fs)` (RBJ cookbook) + **TDF-II** per-sample `process`. Butterworth-**staggered Q** for cut slopes (12/24/48/96 dB/oct). `Fs`-parametric (host rate varies).
-- [ ] **Band array**: `bands[i] = {type, freq, Q, gainDb, on, dynOn, rangeDb, threshDb, ratio, attackMs, releaseMs, muted, soloed}`. Add via double-click spectrum, delete via drag-off. Fixed low-cut/high-cut ends.
-- [ ] **Per-band dynamic detector** (frequency-selective): bandpass-tap the signal at the band's Freq/Q → rectify → branching attack/release envelope (reuse the file's existing `aC/rC` ballistics, lines 281/303) → dB. Gain reduction = `(levelDb - threshDb) * (1 - 1/ratio)`, clamped to `Range`, applied as a dB offset to the band's static Gain. Smooth in the **dB domain**.
-- [ ] **Coefficient smoothing** (per-block recompute + ramp / crossfade) so dragging Freq/Q/Gain doesn't zipper.
-- [ ] **Switchable tap point** (decision #3): "EQ affects visuals" on → insert before the `ringX/ringY` write; off → after (audio-only). Default off.
-- [ ] **MIX** = parallel dry/wet `(1-mix)*dry + mix*wet`; **OUT** = post-EQ dB trim. Per-band on/off, band bypass, Mute/Solo. EQ master power toggle.
-- [ ] **Analyzer view = EQ view**: toggle swaps the beam canvas for grid + filled spectrum + composite curve; all-8-knob band row below.
-  - [ ] Spectrum: AnalyserNode tap now (fixed FFT 4096, smoothing 0.8, +4.5 dB/oct tilt, 90 dB range, log 20 Hz–20 kHz) + **Freeze**/peak-hold.
-  - [ ] **Curve from the same coeffs** the audio uses (RBJ magnitude formula, no FFT) → display always equals sound. Per-band colored fills between the band's dB curve and 0 dB. Dynamic bands: static curve + translucent ghost spanning Gain…Gain±Range.
-  - [ ] **Draggable numbered handles** as DOM over canvas: X↔freq (log), Y↔gain, wheel↔Q, double-click↔reset. Each drag = **one undo gesture** (Phase 0).
-  - [ ] Axis math: `freqToX(f)=padL+W*(log10(f)-1.301)/3`; `xToFreq(x)=10^(1.301+3*(x-padL)/W)`; `gainToY(dB)=padT+Hh*(R-dB)/(2R)`.
-- [ ] EQ-only preset bank (decision #11): loading one replaces only the `bands[]` params, synth untouched.
+- [x] **Portable biquad module** *(done: `_eqCoeffs` + `_eqSections` — Butterworth-staggered cuts 12/24/48/96, real ±g/2 tilt, depth notch)* (framework-agnostic pure math): `computeCoeffs(type, freq, Q, gainDb, Fs)` (RBJ cookbook) + **TDF-II** per-sample `process`. Butterworth-**staggered Q** for cut slopes (12/24/48/96 dB/oct). `Fs`-parametric (host rate varies).
+- [x] **Band array**: `bands[i] = {type, freq, Q, gainDb, on, dynOn, rangeDb, threshDb, ratio, attackMs, releaseMs, muted, soloed}`. Add via double-click spectrum, delete via drag-off. Fixed low-cut/high-cut ends.
+- [x] **Per-band dynamic detector** (frequency-selective): bandpass-tap the signal at the band's Freq/Q → rectify → branching attack/release envelope (reuse the file's existing `aC/rC` ballistics, lines 281/303) → dB. Gain reduction = `(levelDb - threshDb) * (1 - 1/ratio)`, clamped to `Range`, applied as a dB offset to the band's static Gain. Smooth in the **dB domain**.
+- [x] **Coefficient smoothing** (per-block recompute + ramp / crossfade) so dragging Freq/Q/Gain doesn't zipper.
+- [x] **Switchable tap point** (decision #3): "EQ affects visuals" on → insert before the `ringX/ringY` write; off → after (audio-only). Default off.
+- [x] **MIX** = parallel dry/wet `(1-mix)*dry + mix*wet`; **OUT** = post-EQ dB trim. Per-band on/off, band bypass, Mute/Solo. EQ master power toggle.
+- [x] **Analyzer view = EQ view**: toggle swaps the beam canvas for grid + filled spectrum + composite curve; all-8-knob band row below.
+  - [x] Spectrum: AnalyserNode tap now (fixed FFT 4096, smoothing 0.8, +4.5 dB/oct tilt, 90 dB range, log 20 Hz–20 kHz) + **Freeze**/peak-hold.
+  - [x] **Curve from the same coeffs** the audio uses (RBJ magnitude formula, no FFT) → display always equals sound. Per-band colored fills between the band's dB curve and 0 dB. Dynamic bands: static curve + translucent ghost spanning Gain…Gain±Range.
+  - [x] **Draggable numbered handles** as DOM over canvas: X↔freq (log), Y↔gain, wheel↔Q, double-click↔reset. Each drag = **one undo gesture** (Phase 0).
+  - [x] Axis math: `freqToX(f)=padL+W*(log10(f)-1.301)/3`; `xToFreq(x)=10^(1.301+3*(x-padL)/W)`; `gainToY(dB)=padT+Hh*(R-dB)/(2R)`.
+- [x] EQ-only preset bank (decision #11): loading one replaces only the `bands[]` params, synth untouched.
 
 ### Phase 3 — Tempo sync
 - [ ] Add `fmSync` (bool, default false) + `fmDivision` (int index) to the param model (so presets + undo capture them free).
@@ -102,9 +105,9 @@ figure. That's why decision #3 is a toggle, and why the beam tap point is switch
 - [ ] *(Plugin)* swap `bpm` for host tempo; SYNC mode derives phase from host ppq (grid-lock). Free-run for standalone/now.
 
 ### Phase 4 — Export FAUST button
-- [ ] Generate a `.dsp` for the **EQ / filter chain** from the current band array: RBJ biquads via `filters.lib`, per-band dynamics via envelope followers, `si.bus`/parallel bands, MIX + OUT. Parameterized by the live band values.
-- [ ] Wire the "Export FAUST" button + a download. *(Scope is the EQ, per decision #12 — not the geometric synth engine, which doesn't map cleanly to Faust.)*
-- [ ] *(Optional)* validate the emitted `.dsp` compiles in the online Faust IDE.
+- [x] Generate a `.dsp` for the **EQ / filter chain** from the current band array: RBJ biquads (same `_eqCoeffs` math, `ma.SR`-aware) as a serial `fi.tf22t` cascade, per-band frequency-selective dynamics (band-pass sidechain → ~46 ms RMS → dB-domain attack/release), MIX + OUT. Parameterized by the live band values (hsliders, grouped per band).
+- [x] Wire the "Export FAUST" button (↓ FAUST in the EQ BANDS row, analyzer view) + a download. *(Scope is the EQ, per decision #12 — not the geometric synth engine, which doesn't map cleanly to Faust.)*
+- [x] *(Optional)* validate the emitted `.dsp` compiles — verified against Faust 2.86.2 (faustwasm): all band types + dyn variants compile; rendered output matches the app's biquad to 0.00000 dB at a +6 dB bell test.
 
 ### Phase 5 — iPlug2 plugin port (FL Studio VST3 + CLAP)
 - [ ] Scaffold from the **iPlug2OOS** out-of-source template; targets VST3 + CLAP (+ standalone).
@@ -118,12 +121,25 @@ figure. That's why decision #3 is a toggle, and why the beam tap point is switch
 
 ---
 
+### Wavetable unit — imported wavetables as an 11th generator  *(built 2026-07-24; not part of the original phase plan)*
+- [x] **Serum/Vital `.wav` + Surge `.wt` import** — RIFF walker (PCM 16/24/32, float32, `WAVE_FORMAT_EXTENSIBLE`), the Xfer `clm ` chunk (`<!>AAAA BC000000 D`), frame-size inference with a user chooser when ambiguous, loud structural repairs, hostile-input hardening.
+- [x] **FFT mip pyramid** built at import in a worker (data:/blob/main-thread fallback chain): level *k* = `N>>k` down to 8, harmonics `1..Nk/2-1`, DC and Nyquist zeroed at every level, inverse scaled by `1/N` so a retained harmonic keeps its amplitude across levels. **This is a port spec** — the C++ side must match it within tolerance.
+- [x] **The oscillator**: dedicated per-voice phase (X/Y HARM inert), MORPH as the frame position (stepped tables use `floor(m*frames)` so the last frame is reachable), fractional LOD from the true sampler increment with adjacent-level blending, mono tables drawn through ST PHASE and **stereo tables mapping L→X and R→Y — a scope-figure wavetable no Serum-class synth can do**.
+- [x] **Storage + presets**: IndexedDB keyed by content hash (probed with a real round-trip because this app runs from `file://`, with a genuine in-memory fallback); presets carry a *reference*, never samples; a missing table warns by name and keeps playing the built-in.
+- [x] **UI**: LOAD TABLE, live frame strip with the MORPH playhead, per-table TRIM, readable in-panel errors.
+- Detail: `WAVETABLE_UNIT_PLAN.md` (design + verified format specs) and `WAVETABLE_BUILD_PLAN.md` (commit-by-commit). Harnesses: `tools/wavetable-check.js`, `tools/wt-ui-check.js`.
+
+### Reference drum loops — tempo-matched accompaniment  *(built 2026-07-24; evaluation aid, not instrument surface)*
+- [x] Tempo-labelled loops embedded as a gitignored base64 bundle so they work from `file://`; loop length derived from tempo × beats (the files carry ~18 ms of tail that would otherwise drift); `playbackRate` matching with the pitch trade-off surfaced in the UI; changing tempo stops playback; PLAY kickstarts DRONE and re-aligns the tempo-synced motions to the loop downbeat; switching loops parks the instrument and adopts the loop's native tempo. Detail: `tools/make-loops.js`, `tools/loop-check.js`.
+
 ## 3. Open items / risks
 - **COOP/COEP headers** for SharedArrayBuffer in the browser build (Phase 1). Moot in the plugin.
 - **iPlug2 = more hand-built plumbing** than JUCE (no `APVTS`/`UndoManager`/`juce::dsp`). Accepted for the MIT license; the JS param/undo/preset/EQ designs above are written to be the C++ spec so it's a port, not a redesign.
 - **Dynamics direction** (downward vs bidirectional) + **Range sign** semantics — confirm during Phase 2.
 - **Add/remove-bands** UI + variable band count adds state/layout complexity vs a fixed 6+2.
 - **EQ-on-the-beam** (visuals toggle on) can turn a clean figure to mush under heavy filtering — a feature, but document it.
+- **Wavetable stretch/pitch**: the reference-loop player matches tempo by resampling, so a stretch shifts pitch (flagged past 15% in the UI). A pitch-preserving stretch is deferred.
+- **Filter stability** (fixed 2026-07-24): the Chamberlin SVF diverges past `f = sqrt(q²+4) - q`; the coefficient is now clamped to 0.95 of that bound. Any future filter work must preserve this — `tools/engine-stability-check.js` sweeps 420 combinations to enforce it.
 
 ## 4. Key references
 - RBJ Audio-EQ-Cookbook (biquad coeffs): https://webaudio.github.io/Audio-EQ-Cookbook/audio-eq-cookbook.html

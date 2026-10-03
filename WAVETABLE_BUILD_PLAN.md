@@ -1,0 +1,209 @@
+# Wavetable unit — BUILD PLAN (execution-ready)
+
+*(2026-07-23. Companion to `WAVETABLE_UNIT_PLAN.md`, which holds the verified format specs, the design
+rationale, and the risk register — read it first; this document is the implementation order with concrete
+anchors. Owner decision: build BEFORE the iPlug2 port, in the browser, as a `SynthCore` addition.)*
+
+## Ground rules (inherited from the repo's working discipline)
+- Every commit keeps the app working; `node --check` on the extracted dc script per commit.
+- Engine changes prove themselves against the harnesses: goldens stay bit-identical for non-wavetable
+  scenarios, worklet/block equivalence stay green, browser pass stays green in both engines.
+- New capability = new harness. This unit ships `tools/wavetable-check.js` + extensions to golden /
+  worklet-equiv / browser-pass.
+- 🔍 **EVERY BUILD COMMIT GETS A LIVE-SURFACE CODEX REVIEW (owner, 2026-07-23) — not optional, not batched.**
+  After each commit lands and its harnesses are green:
+  `bash "…/mini-orchie/.sprint/ultra-review-spawn.sh" --repo "$(git rev-parse --show-toplevel)" --profile deep --model gpt-5.5 --commit <the-just-landed-sha>`
+  (the sha must be HEAD — scoping a review to a commit that predates an applied fix makes the reviewer
+  re-report issues already fixed downstream). VERIFY every finding against the live code before applying;
+  drop what you cannot confirm; apply, re-run the harnesses, commit the fixes, then move to the next unit
+  of work. **Why this rule exists:** C1's parser shipped with the Surge `.wt` flag masks wrong by four bits
+  (real values `wtf_is_sample=1, wtf_int16=4, wtf_int16_is_16=8`; the code had `0x10/0x40/0x80` from a
+  secondary source), so every real Surge int16 table would have been rejected — and the fixture generator
+  carried the same wrong constants, so the suite passed. Two thorough rounds of PLAN review could not see
+  it; one live-surface review found it plus nine more (hostile-header allocation, raw `RangeError` on a
+  zero-length `fmt`, bogus EXTENSIBLE GUID accepted, NaN/Inf poisoning, host-endian hash writes, a
+  self-comparing hash test). Plan review checks intent; only live-surface review checks the bytes.
+- Single-file app: all code lives in `OsciSynth Type 465.dc.html`; pure logic goes on `SynthCore` (it must
+  serialize into the worklet module) or as top-level functions beside it; UI logic on `Component`.
+
+## STATUS — unit complete (2026-07-24)
+C1 parser + fixtures · C2 mip pyramid · C3 oscillator + transport · C4 storage + preset refs ·
+C5 import UI · C6 docs/close-out — **all landed**, each followed by a live-surface codex review whose
+findings were verified and applied. Deferred deliberately: spectral-morph frame interpolation (falls back
+to linear), Serum-style arbitrary-audio slicing, wavetable export, and >2 concurrently loaded tables.
+
+## Commit sequence
+
+### C1 — `parseWavetable` + fixtures + `tools/wavetable-check.js`  *(pure code, zero UI/engine impact)*
+- Top-level function `parseWavetable(buf)` (an `ArrayBuffer`). **Import-side code (parser, FFT, mip
+  builder) NEVER enters the worklet** — `_workletModuleSrc()` serializes `SynthCore.toString()` plus the
+  wrapper ONLY (dc.html:663-665), and the port plan forbids import-time work in the DSP core anyway. Only
+  the sampler + table cache live on `SynthCore`; the worklet receives finished mip buffers by message.
+  RIFF walker modeled on `parseMidi`
+  (dc.html:1330s — `DataView` + chunk loop). Returns
+  `{frameSize, frames, channels, dataL:Float32Array, dataR:Float32Array|null, meta:{source:'clm'|'vawt'|'inferred'|'user', interp:{raw:0|1|2|3|4, play:0|1}, comment, truncated:[]}}`
+  (`raw` = the clm byte verbatim for round-trip/export fidelity; `play` = what the v1 sampler honours:
+  0 = hard step, 1 = linear — spectral 2/3/4 collapse to play:1, documented)
+  or throws `Error` with a user-readable message.
+- Format matrix (specs in the unit plan — do not re-derive): RIFF/WAVE with `fmt ` formats 1 (PCM int
+  16/24/32), 3 (float32), and **0xFFFE WAVE_FORMAT_EXTENSIBLE resolved via the SubFormat GUID's first two
+  bytes (0x0001 → PCM, 0x0003 → float; anything else → polite reject)**; `data`; `clm ` (parse
+  `<!>AAAA B`); unknown chunks skipped via size; `vawt`
+  sniff for Surge `.wt` (WaveSize u32 / WaveCount u16 / Flags u16: 0x40 int16-else-float32, 0x80 full-range,
+  0x10 sample-not-wavetable → reject politely).
+- Repair rules exactly as the unit plan states them (256-frame cap with notice, partial-tail truncation with
+  notice, loud rejects). No `clm ` → infer (2048 first, then power-of-two divisors 256…8192 yielding
+  ≤256 integer frames); mark `source:'inferred'` + `ambiguous:true` when several candidates fit (UI asks, C5).
+- Stereo: WAV `numChannels==2` → de-interleave into dataL/dataR. `vawt` is mono-only by spec.
+- **Canonical hash (the port-spec definition, used everywhere):** SHA-256 (small sync JS implementation —
+  node/worker parity, ~ms for 2 MB) over: samples after STRUCTURAL repair ONLY (format decode, de-
+  interleave, frame cap, tail truncation) as little-endian Float32 bytes (L then R), then `frameSize,
+  frames, channels, rawInterp` as little-endian u32. **DC/Nyquist removal is NOT part of the hashed bytes
+  or the stored rawSamples** — it happens during mip DERIVATION and is versioned by `mipAlgoVersion`, so
+  the hash identifies the imported artifact and re-deriving mips can evolve without orphaning presets. Preset references carry
+  `{hash, name, frames, frameSize, channels, interp, trimDb}` so playback semantics survive before data
+  resolves.
+- **Fixture matrix — generated by `tools/make-wavetable-fixtures.js`, deterministic (no RNG), written to
+  `tools/fixtures/` (gitignored; only the generator is committed):** clm 4×2048; no-clm
+  2048×2; stereo X/Y (circle→star); int16 + int24 (sign-extension case) + float32; WAVE_FORMAT_EXTENSIBLE;
+  RIFF with JUNK/LIST chunks and odd-size chunk padding, in shuffled chunk order; a DC-offset frame and a
+  Nyquist-component frame; Surge `.wt`; corrupt header; odd tail; 300 frames; a 1-frame and a 2-frame
+  table. Generated-only (a real Serum factory table is copyrighted — if the owner drops one into
+  `tools/fixtures/private/`, the check picks it up opportunistically and skips silently otherwise).
+- `tools/wavetable-check.js`: run the whole matrix; assert every parsed field, every repair rule, hash
+  stability across runs, and 24-bit sign extension explicitly.
+
+### C2 — Mip pyramid builder  *(pure DSP, still no engine wiring)*
+- `buildWavetableMips(table)` → `{levels:[{frameSize, frames:Float32Array /*concatenated*/}], layoutMeta,
+  mipAlgoVersion:1}` per channel. Radix-2 real FFT as a top-level page/worker function (NOT on `SynthCore` —
+  the DSP core never builds mips; see C1). ~60 lines, no external libs.
+- **Parametric in the real frameSize N** (256…8192, never hard-coded 2048): level k frame length
+  `Nk = N >> k`, k = 0 … log2(N/8); retain harmonics `1 … floor(Nk/2)-1`; **zero DC + Nyquist at every
+  level including 0**. FFT normalization contract: forward unscaled, inverse × 1/N — stated in code; the
+  C++ port matches within tolerance. `mipAlgoVersion` is stored with cached tables: mips are DERIVED data —
+  rebuilding with a changed algorithm changes sound, so the version gates cache reuse.
+- Runs in a **classic Worker** assembled from source strings — but worker construction on a `file://`
+  origin is PROBED, not assumed (the worklet needed a data:-URL fallback for exactly this class of quirk,
+  dc.html:755-758): try `data:` URL worker → Blob URL worker → **synchronous main-thread build as the
+  final fallback** (correctness never depends on the worker; only jank does, and the import dialog says
+  "building…"). The browser pass exercises import from `file://` in both engines, whichever path engages.
+  Import path: parse (main, ms) → hash → mips (worker or fallback) → store (C4) → transfer (C3).
+- `tools/wavetable-check.js` extends: per-level band-limit assertion (FFT each level, zero energy above its
+  retained band); **level-0 ≈ original MINUS DC and Nyquist** (not raw equality — that would contradict the
+  DC/Nyquist zeroing) within 1e-6; determinism (same input → same bytes); a DC-offset fixture comes out
+  DC-free with the import summary noting the correction.
+
+### C3 — Engine: the 11th generator + worklet transport
+- `SynthCore` gains: `wtCache` (hash → {mipsL, mipsR|null, frames, frameSize, interp, trimDb}),
+  `wtSelect(hash)`, and the sampler `_wtSample(mips, pos, phase, lod)`.
+- **The BUILT-IN default table ships in this commit** (16×2048 basic-shapes morph, generated by code at
+  core construction in EVERY host — page, worklet, SPN — under pseudo-hash `builtin:basic`), because the
+  generator becomes selectable here and must never render silence. **Table-availability state machine**
+  (single rule, all hosts): `builtin` → `pending` (external hash referenced, transport in flight → RENDER
+  THE BUILT-IN meanwhile) → `ready` (switch at a block boundary) | `missing` (settled negative → inline
+  warning, stay on built-in). Never silence, never garbage.
+- `shape()` new branch BEFORE the lorenz `else` (SynthCore, dc.html:392–402 region), `gen==='wavetable'`:
+  - **Dedicated per-voice phase `v.wtPh`** (voice-object field + `noteOn` reset, floor-wrapped), advanced
+    by the BASE increment `f/sr` — NOT `v.px`, which advances by `f·xHarm·(1+det)/sr` (dc.html:450) and
+    would make X HARM a hidden pitch multiplier. X/Y HARM are inert on this generator (said in its GENS
+    description).
+  - Frame position from m = `_mEff` (MORPH incl. sync/LFO — free): interp≠0 → `pos = m·(frames-1)` with
+    adjacent-frame crossfade, clamped ends; **interp=0 → `frame = min(frames-1, floor(m·frames))`** (with
+    the (frames-1)+floor form the last frame is reachable only at exactly m=1). 1-frame/2-frame degenerate
+    cases explicit.
+  - **Fractional LOD from the sampler's ACTUAL increment**: `inc = f/sr` (cycles/sample) →
+    `lod = clamp(log2(max(1, frameSize·inc)), 0, L-1)`; sample the two adjacent integer levels and blend by
+    the fraction (continuous — no hard switch, no hysteresis; add one smoothed per-voice `wtLod` only if
+    measurement shows jitter). Intra-frame interpolation linear, cubic behind a flag (ear test decides).
+  - Mono: `x=sample(pos, wtPh)`, `y=sample(pos, wtPh+P.phOff)`, `z=0`; stereo: `x=L(pos,wtPh)`,
+    `y=R(pos,wtPh)`, `z=0`. Stereo normalization GLOBAL across channels+frames (one factor per table).
+- `GENS` (Component, dc.html:554–564) gains
+  `['wavetable','WAVETABLE','Imported table — MORPH scans frames · stereo tables draw X/Y directly · LOAD TABLE to import']`.
+- **MUTATE excludes the table** (it randomizes params only; `gen` untouched already — verify, don't assume).
+- **Transport message, fully specified**: `{t:'wavetable', hash, meta:{frameSize, frames, channels,
+  interp:{raw,play}, mipAlgoVersion, levels:[{frameSize, byteLengthL, byteLengthR|0} …]}, buffers:[L0…LK,
+  R0…RK]}` — buffer order is level-major, L block then R block; the processor VALIDATES every byteLength
+  against meta before cache insert and drops the whole message with a console warning on any mismatch
+  (never caches a torn table). Buffers are **COPIES built for the send**
+  (`Float32Array.slice().buffer`) posted as transferables. The main thread's mips are persistent state —
+  the SPN fallback and the frame strip read them — and a transferred buffer DETACHES on the sender side
+  (unlike the beam pool, whose buffers round-trip by design). Copy cost ≈ 8 MiB worst case, once per
+  import/table-switch: irrelevant. Processor `onMsg` gains the branch (module string, dc.html:684 region)
+  → `wtCache` set (2-table LRU). Patch carries only `wtHash`; a patch referencing a hash the processor
+  lacks ⇒ `pending` ⇒ built-in renders (state machine above) until the table message lands — including the
+  send-ordering race (patch first, table later) and the reverse. On `_startWorklet()` success re-send the
+  active table (`_sendMidiToWorklet` pattern, dc.html:735) — node rebuild / SPN→worklet restore must not
+  lose it.
+- SPN path: `Component` hands the decoded table to the local core directly (same object, no copy).
+- **Harnesses**: golden scenario `s4_wavetable` (fixture table injected directly into the core, MORPH sweep
+  + morphSync, mono + stereo; LOD-boundary crossings driven by what the engine actually has — no glide
+  exists (`v.freq` is fixed at noteOn, dc.html:380-385) — so: notes an octave apart, a mid-scenario
+  drawSpd change, and an fmDepth wobble, together spanning ≥2 LOD boundaries) — new reference;
+  s1–s3 stay bit-identical; worklet-equiv extends: table via copied-transferable message vs direct SPN
+  injection → bit-identical audio+beam, including the patch-before-table race (built-in renders, then
+  switches); block-equiv rerun.
+- **Anti-alias assertion, methodology stated** (a sampled output FFT has no bins "above Nyquist"): render a
+  bright fixture at a high fundamental, locate the expected FOLDBACK bins (mirror positions of the removed
+  harmonics), and assert their energy is < threshold and ≥40 dB below the same render with mips disabled —
+  the delta proves the mips do the work. Repeat at 44.1k/48k/96k.
+- **C++-port fixture pack** (goes with the golden refs): canonical-hash byte vectors, mip byte dumps for one
+  small table (with tolerance), sampler edge cases (interp 0/1, 1-frame, 2-frame, endpoint clamp), LOD
+  values at the three sample rates.
+
+### C4 — Storage + preset reference
+- IndexedDB `oscisynth-wavetables` keyed by canonical hash: `{hash, name, frameSize, frames, channels,
+  interp, trimDb, rawSamples, mipAlgoVersion}` — store canonical POST-repair RAW samples; mips are derived,
+  rebuilt on load, and `mipAlgoVersion` gates any cached derivation. **IndexedDB on `file://` is PROBED,
+  never assumed** (this is a file-first app): startup probe = open → write → read → delete a sentinel
+  record, with `onversionchange` close handling; any failure (quota, private mode, engine quirk) flips to a
+  REAL in-memory cache (same interface, session-lifetime) and the import dialog says persistence is off.
+- Preset schema: optional `wavetable:{hash, name, frames, frameSize, channels, interp:{raw,play}, trimDb}` —
+  the SAME canonical reference C1 defines, everywhere (preset, snapshot/undo, patch `wtHash`+`wtTrimDb`).
+  **trimDb is patch-level state** (a per-preset playback setting applied in the sampler): it rides the JSON
+  patch as a scalar, NOT the table cache or the IDB record. `savePreset`/`exportCurrentPreset` include the
+  reference when the wavetable generator holds a table; `applyPreset` resolves hash → IndexedDB → load+send.
+  Missing → state machine `missing` (inline warning, built-in renders). Switching tables = one undo step.
+- **Async-resolution epoch guard** (races are real: preset A's IDB read + mip build can land after preset B
+  was loaded): `Component._wtEpoch` increments on every applyPreset/import/table-select; every async
+  resolution carries the epoch it started with and is DISCARDED on completion if stale. Cache fills are
+  always allowed (a table message may still populate the cache); **selection follows only the CURRENT
+  patch's `wtHash`** — on both sides, main and processor.
+- `tools/wavetable-check.js` extends: preset reference round-trip (save with table → load resolves), missing-
+  table degradation (loads, warns, falls back).
+
+### C5 — UI
+- **LOAD TABLE** button in the SIGNAL GENERATOR panel (template near the generator selector, dc.html:155–157
+  region), enabled when `gen==='wavetable'`; a **dedicated** hidden file input (`wtFileRef`,
+  `accept=".wav,.wt,audio/wav,audio/x-wav"`) — do NOT overload the preset input (dc.html:1580), same
+  handler pattern only.
+- Import flow: parse → (ambiguous frame size? small chooser listing candidates — the unit-plan safety valve)
+  → summary line (name, frames × frameSize, mono/stereo, source, truncation notices) → hash/store/send →
+  select. Errors surface as readable text in the dialog, not `alert()`.
+- **Frame strip** under the generator description: current frame mini-preview (mono: waveform; stereo: X/Y
+  figure) + MORPH playhead position + frame count. Canvas, redrawn at the existing RAF tick, display-only
+  (reads the local mip level 0).
+- Per-table **TRIM** chip (dB, stored with the table reference in presets) — the loudness-mismatch mitigation
+  from the unit plan; applied in the sampler, full precision, display-rounded.
+- **Browser pass extends** (both engines): programmatic import of a generated fixture through the real file
+  input (DataTransfer), generator renders non-silence, MORPH sweeps, preset with table reference round-trips,
+  missing-table path degrades with the warning visible.
+
+### C6 — Docs + close-out
+- Roadmap: new unit section marked done; `tools/README.md` rows for the new checks; unit-plan status updated.
+- Full sweep: all tools green, goldens (now s1–s4) bit-identical vs their references, dual-engine browser pass.
+
+## Deliberately NOT in v1 (recorded so review argues about the right scope)
+- Spectral-morph frame interpolation (clm modes 2–4) → linear fallback, documented.
+- Serum-style arbitrary-audio slicing (fixed/zero-cross/pitch) — import real tables only.
+- Wavetable EXPORT (writing clm WAVs) — trivial later; needs the even-BlocSize gotcha.
+- z-axis from tables (3-channel tables don't exist in the wild); tables in presets-by-value; >2 loaded tables.
+
+## Open risks the reviewers should attack
+- Mip crossfade + MORPH frame crossfade + intra-frame interpolation stack three interpolations — audible
+  softening at the top octave? (Serum's answer: better intra-frame interpolation at low mips.)
+- The 2048-sample cycle at `baseFreq` 20 Hz drone: increment ~0.00042 frames/sample — intra-frame linear
+  interpolation resolution is fine in double, but check beam smoothness at extreme zoom.
+- FFT/mip code lives in ONE top-level page function serialized into the import Worker's blob (never in
+  `SynthCore`/the worklet — C1/C2); keep it dependency-free and watch worker-source size (~+3 KB).
+- IndexedDB in `file://` contexts is spec-legal but browser-quirky — the in-memory fallback must be real,
+  not a stub.
